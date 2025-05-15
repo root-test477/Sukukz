@@ -41,13 +41,13 @@ export class Tutorial {
   /**
    * Start a tutorial for a user
    */
-  public static async startTutorial(chatId: number, tutorialType: string): Promise<void> {
+  public static async startTutorial(chatId: number): Promise<void> {
     const language = await getUserLanguage(chatId) as SupportedLanguage;
     
-    // Create a new progress entry
+    // Always start with the wallet tutorial for a streamlined experience
     const progress: TutorialProgress = {
       userId: chatId,
-      currentStep: `${tutorialType}_step1`,
+      currentStep: 'wallet_step1', // Always start with wallet tutorial
       completedSteps: [],
       startTime: Date.now(),
       lastActivity: Date.now()
@@ -58,7 +58,7 @@ export class Tutorial {
     // Send welcome message
     await bot.sendMessage(
       chatId,
-      getTranslation('tutorial_welcome', language),
+      'Welcome to the setup tutorial! This will guide you through connecting your wallet and making transactions.',
       { parse_mode: 'Markdown' }
     );
     
@@ -97,13 +97,35 @@ export class Tutorial {
       const currentStepDef = this.getTutorialStep(progress.currentStep);
       
       if (currentStepDef && currentStepDef.nextStep) {
+        // Check if current step requires wallet connection before proceeding
+        if (progress.currentStep === 'wallet_step2') {
+          // Import the connector to check if wallet is connected
+          const { getConnector } = await import('../ton-connect/connector');
+          const connector = getConnector(chatId);
+          
+          // If wallet is not connected, remind user to connect first
+          if (!connector.connected) {
+            await bot.answerCallbackQuery(query.id, {
+              text: 'Please connect your wallet with /connect before proceeding',
+              show_alert: true
+            });
+            
+            // Send a message reminding the user to connect their wallet
+            await bot.sendMessage(
+              chatId,
+              '*Important:* Please use /connect to connect your wallet before continuing with the tutorial.\n\nOnce your wallet is connected, click the Next button again.',
+              { parse_mode: 'Markdown' }
+            );
+            return;
+          }
+        }
+        
         // Move to next step
         progress.currentStep = currentStepDef.nextStep;
         progress.lastActivity = Date.now();
         
-        const language = await getUserLanguage(chatId) as SupportedLanguage;
         await bot.answerCallbackQuery(query.id, {
-          text: getTranslation('tutorial_step_completed', language)
+          text: 'Step completed!'
         });
         
         // Show the next step
@@ -205,52 +227,39 @@ export class Tutorial {
       },
       'wallet_step3': {
         id: 'wallet_step3',
-        message: '*Viewing Wallet Info*\n\nAfter connecting, use /wallet to view your:\n\n- Wallet address\n- Balance (if available)\n- Connected wallet name',
+        message: '*Viewing Wallet Info*\n\nAfter connecting, use /my_wallet to view your:\n\n- Wallet address\n- Balance (if available)\n- Connected wallet name',
         nextStep: 'wallet_step4'
       },
       'wallet_step4': {
         id: 'wallet_step4',
-        message: '*Disconnecting*\n\nTo disconnect your wallet, simply use the /disconnect command.\n\nThis ends your current wallet session and you\'ll need to reconnect later.',
-        nextStep: 'wallet_step5'
-      },
-      'wallet_step5': {
-        id: 'wallet_step5',
-        message: '*Great job!*\n\nYou\'ve completed the wallet tutorial. Would you like to learn about transactions next?',
-        options: [
-          [{ text: 'Start Transaction Tutorial', callback_data: `${this.TUTORIAL_CALLBACK_PREFIX}next_wallet_transaction` }],
-          [{ text: 'Finish', callback_data: `${this.TUTORIAL_CALLBACK_PREFIX}exit` }]
-        ]
-      },
-      'wallet_transaction': {
-        id: 'wallet_transaction',
-        message: 'Starting transaction tutorial...',
+        message: '*Great job!*\n\nNow let\'s learn how to send transactions using the bot.',
         nextStep: 'transaction_step1'
       },
       
       // Transaction Tutorial
       'transaction_step1': {
         id: 'transaction_step1',
-        message: '*Transaction Tutorial*\n\nThis tutorial will show you how to send transactions using the bot.',
+        message: '*Sending Transactions*\n\nNow that you know how to connect your wallet and view its details, let\'s learn how to send transactions.',
         nextStep: 'transaction_step2'
       },
       'transaction_step2': {
         id: 'transaction_step2',
-        message: '*Sending a Transaction*\n\nTo send a transaction:\n\n1. Make sure your wallet is connected first\n2. Use the /send command',
+        message: '*Using /send_tx Command*\n\nTo send a transaction, use the /send_tx command. This will initiate the transaction process.',
         nextStep: 'transaction_step3'
       },
       'transaction_step3': {
         id: 'transaction_step3',
-        message: '*Confirming Transactions*\n\nAfter using /send:\n\n1. A confirmation request will appear in your wallet\n2. Review the details carefully\n3. Approve or reject the transaction in your wallet',
+        message: '*Confirming in Your Wallet*\n\nAfter using /send_tx:\n\n1. A confirmation request will appear in your wallet\n2. Review the transaction details carefully\n3. Approve or reject the transaction directly in your wallet app',
         nextStep: 'transaction_step4'
       },
       'transaction_step4': {
         id: 'transaction_step4',
-        message: '*Transaction Status*\n\nThe bot will notify you of the transaction status:\n\n- When the transaction is sent\n- If there are any errors\n- When the transaction is confirmed on the blockchain',
+        message: '*Transaction Status Updates*\n\nThe bot will keep you informed about your transaction:\n\n- When the transaction is submitted to the network\n- If there are any errors during processing\n- When the transaction is confirmed on the blockchain',
         nextStep: 'transaction_step5'
       },
       'transaction_step5': {
         id: 'transaction_step5',
-        message: '*Congratulations!*\n\nYou\'ve completed all the tutorials. You now know how to use the bot\'s main features.',
+        message: '*Congratulations!*\n\nYou\'ve completed the setup tutorial! You now know how to:\n\n1. Connect your wallet with /connect\n2. View your wallet details with /my_wallet\n3. Send transactions with /send_tx\n\nThese are the essential features that will help you get started with the bot.',
       }
     };
     
@@ -284,8 +293,7 @@ export async function handleTutorialTypeCallback(query: TelegramBot.CallbackQuer
   if (!query.data || !query.message) return;
   
   const chatId = query.message.chat.id;
-  const type = query.data.replace('tutorial_type_', '');
   
   await bot.answerCallbackQuery(query.id);
-  await Tutorial.startTutorial(chatId, type);
+  await Tutorial.startTutorial(chatId);
 }
