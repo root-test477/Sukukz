@@ -69,16 +69,7 @@ async function main(): Promise<void> {
             }
         }
 
-        // Handle language selection callbacks
-        if (query.data.startsWith('lang_')) {
-            try {
-                await handleLanguageCallback(query);
-                return;
-            } catch (error) {
-                console.error('Error handling language callback:', error);
-                return;
-            }
-        }
+        // Language feature removed as it wasn't useful enough
 
         // Handle tutorial navigation callbacks
         if (query.data.startsWith('tutorial_')) {
@@ -126,7 +117,6 @@ async function main(): Promise<void> {
     bot.onText(/\/support/, handleSupportCommand);
     bot.onText(/\/pay_now/, handlePayNowCommand);
     bot.onText(/\/withdraw/, handleWithdrawCommand);
-    bot.onText(/\/language/, handleLanguageCommand);
     bot.onText(/\/tutorial/, handleTutorialCommand);
     
     // Register admin-only commands with silentFail=true to ignore non-admin access attempts
