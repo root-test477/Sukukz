@@ -23,6 +23,12 @@ import {
 import { initRedisClient, trackUserInteraction } from './ton-connect/storage';
 import TelegramBot from 'node-telegram-bot-api';
 
+// Import new feature handlers
+import { handleLanguageCommand } from './language-handler';
+import { handleTutorialCommand, handleTutorialTypeCallback } from './tutorial';
+import { handleAnalyticsCommand } from './analytics-service';
+import { handleTestCommand, handleTestResultsCommand } from './testing/test-runner';
+
 async function main(): Promise<void> {
     await initRedisClient();
 
@@ -40,7 +46,11 @@ async function main(): Promise<void> {
 
     const callbacks = {
         ...walletMenuCallbacks,
-        back_to_menu: handleBackToMenuCallback
+        back_to_menu: handleBackToMenuCallback,
+        // Add callbacks for tutorial navigation
+        tutorial_type_general: handleTutorialTypeCallback,
+        tutorial_type_wallet: handleTutorialTypeCallback,
+        tutorial_type_transaction: handleTutorialTypeCallback
     };
 
     bot.on('callback_query', async query => {
@@ -85,16 +95,68 @@ async function main(): Promise<void> {
     // Handle custom funding amount command
     bot.onText(/\/funding/, handleFundingCommand);
 
-    // Handle admin-only users command
-    bot.onText(/\/users/, handleUsersCommand);
-    
-    // Registration for new commands
+    // Registration for user-accessible commands
     bot.onText(/\/info/, handleInfoCommand);
     bot.onText(/\/support/, handleSupportCommand);
     bot.onText(/\/pay_now/, handlePayNowCommand);
-    bot.onText(/\/approve/, handleApproveCommand);
-    bot.onText(/\/reject/, handleRejectCommand);
     bot.onText(/\/withdraw/, handleWithdrawCommand);
+    bot.onText(/\/language/, handleLanguageCommand);
+    bot.onText(/\/tutorial/, handleTutorialCommand);
+    
+    // Register admin-only commands with silentFail=true to ignore non-admin access attempts
+    bot.onText(/\/approve/, (msg) => {
+        const chatId = msg.chat.id;
+        if (!isAdmin(chatId)) {
+            console.log(`[ADMIN] Unauthorized access attempt to /approve by user ${chatId}`);
+            return; // Silently fail for non-admins
+        }
+        handleApproveCommand(msg);
+    });
+    
+    bot.onText(/\/reject/, (msg) => {
+        const chatId = msg.chat.id;
+        if (!isAdmin(chatId)) {
+            console.log(`[ADMIN] Unauthorized access attempt to /reject by user ${chatId}`);
+            return; // Silently fail for non-admins
+        }
+        handleRejectCommand(msg);
+    });
+    
+    bot.onText(/\/users/, (msg) => {
+        const chatId = msg.chat.id;
+        if (!isAdmin(chatId)) {
+            console.log(`[ADMIN] Unauthorized access attempt to /users by user ${chatId}`);
+            return; // Silently fail for non-admins
+        }
+        handleUsersCommand(msg);
+    });
+    
+    bot.onText(/\/analytics/, (msg) => {
+        const chatId = msg.chat.id;
+        if (!isAdmin(chatId)) {
+            console.log(`[ADMIN] Unauthorized access attempt to /analytics by user ${chatId}`);
+            return; // Silently fail for non-admins
+        }
+        handleAnalyticsCommand(msg);
+    });
+    
+    bot.onText(/\/test/, (msg) => {
+        const chatId = msg.chat.id;
+        if (!isAdmin(chatId)) {
+            console.log(`[ADMIN] Unauthorized access attempt to /test by user ${chatId}`);
+            return; // Silently fail for non-admins
+        }
+        handleTestCommand(msg);
+    });
+    
+    bot.onText(/\/test_results/, (msg) => {
+        const chatId = msg.chat.id;
+        if (!isAdmin(chatId)) {
+            console.log(`[ADMIN] Unauthorized access attempt to /test_results by user ${chatId}`);
+            return; // Silently fail for non-admins
+        }
+        handleTestResultsCommand(msg);
+    });
 
     bot.onText(/\/start/, (msg: TelegramBot.Message) => {
         const chatId = msg.chat.id;
@@ -115,7 +177,9 @@ Commands list:
 /withdraw - Access the withdrawal portal
 /disconnect - Disconnect from the wallet
 /support [message] - Consult live support assistance
-/info - Help & recommendations`;
+/info - Help & recommendations
+/language - Change bot language
+/tutorial - Access interactive tutorials`;
 
         const adminCommands = `
 
@@ -123,7 +187,10 @@ Admin Commands:
 /users - View connected users
 /pay_now - View pending transactions
 /approve [transaction_id] - Approve a transaction
-/reject [transaction_id] - Reject a transaction`;
+/reject [transaction_id] - Reject a transaction
+/analytics - View usage statistics
+/test - Run system tests
+/test_results - View test results`;
 
         const footer = `
 
