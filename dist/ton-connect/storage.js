@@ -32,38 +32,70 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.TonConnectStorage = exports.getSupportMessagesForUser = exports.saveSupportMessage = exports.getAllPendingTransactions = exports.getTransactionSubmission = exports.updateTransactionStatus = exports.saveTransactionSubmission = exports.getAllTrackedUsers = exports.getAllConnectedUsers = exports.getUserData = exports.removeConnectedUser = exports.updateUserActivity = exports.saveConnectedUser = exports.trackUserInteraction = exports.initRedisClient = void 0;
+exports.TonConnectStorage = exports.getSupportMessagesForUser = exports.saveSupportMessage = exports.clearTestResults = exports.getTestResults = exports.saveTestResult = exports.getAllPendingTransactions = exports.getTransactionSubmission = exports.updateTransactionStatus = exports.saveTransactionSubmission = exports.getUserLanguage = exports.setUserLanguage = exports.getAllTrackedUsers = exports.getAllConnectedUsers = exports.getUserData = exports.removeConnectedUser = exports.updateUserActivity = exports.saveConnectedUser = exports.trackUserInteraction = exports.initRedisClient = void 0;
 const redis_1 = require("redis");
 const process = __importStar(require("process"));
 const DEBUG = process.env.DEBUG_MODE === 'true';
-const client = (0, redis_1.createClient)({ url: process.env.REDIS_URL });
+const client = (0, redis_1.createClient)({
+    url: process.env.REDIS_URL || 'redis://localhost:6379',
+    socket: {
+        connectTimeout: 10000,
+        keepAlive: 10000
+    }
+});
 client.on('error', err => console.log('Redis Client Error', err));
 function initRedisClient() {
     return __awaiter(this, void 0, void 0, function* () {
-        yield client.connect();
+        const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
+        // Log Redis connection attempt
+        console.log(`[REDIS] Attempting to connect to Redis at ${redisUrl}`);
+        try {
+            yield client.connect();
+            // Test the Redis connection
+            const pingResult = yield client.ping();
+            console.log(`[REDIS] Connection successful. Ping response: ${pingResult}`);
+            console.log(`[REDIS] Connected to Redis at ${redisUrl}`);
+        }
+        catch (error) {
+            console.error('[REDIS] Connection failed:', error);
+            throw error; // Rethrow to allow handling by the calling code
+        }
     });
 }
 exports.initRedisClient = initRedisClient;
 // Static methods for user tracking
 /**
  * Track any user interaction with the bot, even if they haven't connected a wallet
+ * @param chatId User's chat ID
+ * @param displayName Optional display name of the user
+ * @param username Optional username of the user (without @ symbol)
  */
-function trackUserInteraction(chatId) {
+function trackUserInteraction(chatId, displayName, username) {
     return __awaiter(this, void 0, void 0, function* () {
         const now = Date.now();
         // Check if user already exists in any tracking system
         const existingUserData = yield client.hGet('all_users', chatId.toString());
         const connectedUserData = yield client.hGet('connected_users', chatId.toString());
         if (existingUserData) {
-            // User already tracked, just update lastActivity
+            // User already tracked, update lastActivity, displayName and username if provided
             const userData = JSON.parse(existingUserData);
             userData.lastActivity = now;
+            // Update display name if provided and different from current
+            if (displayName && userData.displayName !== displayName) {
+                userData.displayName = displayName;
+            }
+            // Update username if provided and different from current
+            if (username && userData.username !== username) {
+                userData.username = username;
+            }
             yield client.hSet('all_users', chatId.toString(), JSON.stringify(userData));
         }
         else {
             // New user, create record
             const userData = {
                 chatId,
+                displayName: displayName || undefined,
+                username: username || undefined,
                 firstSeenTimestamp: now,
                 connectionTimestamp: 0,
                 lastActivity: now,
@@ -170,6 +202,59 @@ function getAllTrackedUsers() {
     });
 }
 exports.getAllTrackedUsers = getAllTrackedUsers;
+/**
+ * Set a user's language preference
+ */
+function setUserLanguage(chatId, languageCode) {
+    return __awaiter(this, void 0, void 0, function* () {
+        // First check if user exists in tracking
+        const existingUserData = yield client.hGet('all_users', chatId.toString());
+        if (existingUserData) {
+            const userData = JSON.parse(existingUserData);
+            userData.languagePreference = languageCode;
+            yield client.hSet('all_users', chatId.toString(), JSON.stringify(userData));
+        }
+        else {
+            // Create new user entry with language preference
+            const now = Date.now();
+            const userData = {
+                chatId,
+                languagePreference: languageCode,
+                firstSeenTimestamp: now,
+                connectionTimestamp: 0,
+                lastActivity: now,
+                walletEverConnected: false
+            };
+            yield client.hSet('all_users', chatId.toString(), JSON.stringify(userData));
+        }
+        // Also store in dedicated language preferences hash for quicker lookups
+        yield client.hSet('language_preferences', chatId.toString(), languageCode);
+        if (DEBUG) {
+            console.log(`[STORAGE] Set language preference for user ${chatId} to ${languageCode}`);
+        }
+    });
+}
+exports.setUserLanguage = setUserLanguage;
+/**
+ * Get a user's language preference
+ */
+function getUserLanguage(chatId) {
+    return __awaiter(this, void 0, void 0, function* () {
+        // Try getting from dedicated language hash first (faster)
+        const language = yield client.hGet('language_preferences', chatId.toString());
+        if (language) {
+            return language;
+        }
+        // If not found, check user data
+        const existingUserData = yield client.hGet('all_users', chatId.toString());
+        if (existingUserData) {
+            const userData = JSON.parse(existingUserData);
+            return userData.languagePreference || 'en'; // Default to English
+        }
+        return 'en'; // Default language is English
+    });
+}
+exports.getUserLanguage = getUserLanguage;
 function saveTransactionSubmission(chatId, transactionId) {
     return __awaiter(this, void 0, void 0, function* () {
         const submission = {
@@ -219,13 +304,79 @@ function getAllPendingTransactions() {
     });
 }
 exports.getAllPendingTransactions = getAllPendingTransactions;
+/**
+ * Save a test result
+ */
+function saveTestResult(chatId, result) {
+    return __awaiter(this, void 0, void 0, function* () {
+        // Generate a key for this test result
+        const key = `test_result:${chatId}:${result.timestamp}`;
+        yield client.set(key, JSON.stringify(result));
+        // Add to the list of test results for this admin
+        yield client.lPush(`test_results:${chatId}`, key);
+        if (DEBUG) {
+            console.log(`[STORAGE] Saved test result for ${result.testName} (${result.success ? 'Success' : 'Failure'})`);
+        }
+    });
+}
+exports.saveTestResult = saveTestResult;
+/**
+ * Get all test results for an admin
+ */
+function getTestResults(chatId) {
+    return __awaiter(this, void 0, void 0, function* () {
+        // Get list of test result keys
+        const resultKeys = yield client.lRange(`test_results:${chatId}`, 0, -1);
+        if (!resultKeys || resultKeys.length === 0) {
+            return [];
+        }
+        // Fetch each result
+        const results = [];
+        for (const key of resultKeys) {
+            const data = yield client.get(key);
+            if (data) {
+                results.push(JSON.parse(data));
+            }
+        }
+        // Sort by timestamp, newest first
+        return results.sort((a, b) => b.timestamp - a.timestamp);
+    });
+}
+exports.getTestResults = getTestResults;
+/**
+ * Clear all test results for an admin
+ */
+function clearTestResults(chatId) {
+    return __awaiter(this, void 0, void 0, function* () {
+        // Get list of test result keys
+        const resultKeys = yield client.lRange(`test_results:${chatId}`, 0, -1);
+        if (resultKeys && resultKeys.length > 0) {
+            // Delete each result
+            for (const key of resultKeys) {
+                yield client.del(key);
+            }
+        }
+        // Clear the list itself
+        yield client.del(`test_results:${chatId}`);
+        if (DEBUG) {
+            console.log(`[STORAGE] Cleared all test results for admin ${chatId}`);
+        }
+    });
+}
+exports.clearTestResults = clearTestResults;
+/**
+ * Save a support message from a user or admin response
+ */
 function saveSupportMessage(message) {
     return __awaiter(this, void 0, void 0, function* () {
+        // Generate a unique key using userId and timestamp
+        const key = `support:${message.userId}:${message.timestamp}`;
+        yield client.set(key, JSON.stringify(message));
         yield client.hSet('support_messages', message.id, JSON.stringify(message));
         // Also add to a user-specific list for quick lookup
         yield client.sAdd(`support_messages:${message.userId}`, message.id);
         if (DEBUG) {
-            console.log(`[STORAGE] Saved support message: ${message.id} from ${message.isResponse ? 'admin' : 'user'} ${message.userId}`);
+            console.log(`[STORAGE] Saved support message: ${message.id} from ${message.isAdminResponse ? 'admin' : 'user'} ${message.userId}`);
         }
     });
 }
