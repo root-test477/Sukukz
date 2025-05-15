@@ -24,7 +24,7 @@ import { initRedisClient, trackUserInteraction } from './ton-connect/storage';
 import TelegramBot from 'node-telegram-bot-api';
 
 // Import new feature handlers
-import { handleLanguageCommand } from './language-handler';
+import { handleLanguageCommand, handleLanguageCallback } from './language-handler';
 import { handleTutorialCommand, handleTutorialTypeCallback } from './tutorial';
 import { handleAnalyticsCommand } from './analytics-service';
 import { handleTestCommand, handleTestResultsCommand } from './testing/test-runner';
@@ -69,11 +69,37 @@ async function main(): Promise<void> {
             }
         }
 
+        // Handle language selection callbacks
+        if (query.data.startsWith('lang_')) {
+            try {
+                await handleLanguageCallback(query);
+                return;
+            } catch (error) {
+                console.error('Error handling language callback:', error);
+                return;
+            }
+        }
+
+        // Handle tutorial navigation callbacks
+        if (query.data.startsWith('tutorial_')) {
+            if (query.data.startsWith('tutorial_type_')) {
+                // Handle tutorial type selection
+                await handleTutorialTypeCallback(query);
+            } else {
+                // Handle tutorial navigation
+                const Tutorial = (await import('./tutorial')).Tutorial;
+                await Tutorial.handleTutorialCallback(query);
+            }
+            return;
+        }
+
+        // Handle standard JSON callbacks for wallet menu etc.
         let request: { method: string; data: string };
 
         try {
             request = JSON.parse(query.data);
         } catch {
+            console.log(`Unhandled callback query: ${query.data}`);
             return;
         }
 
