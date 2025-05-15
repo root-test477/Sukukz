@@ -1,11 +1,9 @@
 import TelegramBot from 'node-telegram-bot-api';
 import { bot } from '../bot';
 import { getTranslation, SupportedLanguage } from '../localization';
+import { getUserLanguage } from '../ton-connect/storage';
 
-// Temporary function until storage is fully integrated
-async function getUserLanguage(_chatId: number): Promise<string> {
-  return 'en'; // Default to English
-}
+// Use the actual storage implementation for user language
 
 /**
  * Tutorial Steps Interface 
