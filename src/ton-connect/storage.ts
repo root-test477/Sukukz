@@ -14,7 +14,22 @@ const client = createClient({
 client.on('error', err => console.log('Redis Client Error', err));
 
 export async function initRedisClient(): Promise<void> {
-    await client.connect();
+    const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
+    
+    // Log Redis connection attempt
+    console.log(`[REDIS] Attempting to connect to Redis at ${redisUrl}`);
+    
+    try {
+        await client.connect();
+        
+        // Test the Redis connection
+        const pingResult = await client.ping();
+        console.log(`[REDIS] Connection successful. Ping response: ${pingResult}`);
+        console.log(`[REDIS] Connected to Redis at ${redisUrl}`);
+    } catch (error) {
+        console.error('[REDIS] Connection failed:', error);
+        throw error; // Rethrow to allow handling by the calling code
+    }
 }
 
 // User data structure for tracking connected users
