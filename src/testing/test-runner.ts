@@ -32,6 +32,34 @@ export class TestRunner {
   }
 
   /**
+   * Sanitize message content to prevent Telegram formatting errors
+   * This removes problematic characters that can cause parsing issues
+   */
+  private sanitizeMessage(text: string): string {
+    // Simple approach to avoid syntax errors - direct string manipulation
+    let sanitized = text;
+    
+    // Replace HTML tags
+    sanitized = sanitized.replace(/</g, '&lt;');
+    sanitized = sanitized.replace(/>/g, '&gt;');
+    
+    // Replace markdown formatting characters
+    sanitized = sanitized.replace(/\*/g, '*');
+    sanitized = sanitized.replace(/`/g, "'");
+    sanitized = sanitized.replace(/\[/g, '(');
+    sanitized = sanitized.replace(/\]/g, ')');
+    
+    // Convert emoji codes to simple text alternatives
+    sanitized = sanitized.replace(/u2705/g, '[OK]');
+    sanitized = sanitized.replace(/u274c/g, '[X]');
+    sanitized = sanitized.replace(/ud83euddea/g, '[TEST]');
+    sanitized = sanitized.replace(/ud83dudea8/g, '[ALERT]');
+    sanitized = sanitized.replace(/ud83dudcca/g, '[STATS]');
+    
+    return sanitized;
+  }
+
+  /**
    * Run all tests sequentially
    */
   async runAllTests(): Promise<void> {
@@ -61,7 +89,8 @@ export class TestRunner {
       await this.testUserCommand();
       await this.testConnectWalletFlow();
       await this.testErrorHandling();
-
+      await this.testTutorialCommand();
+      
       // Generate and send final report
       await this.sendFinalReport();
     } catch (error) {
@@ -87,27 +116,39 @@ export class TestRunner {
     const passed = this.results.filter(r => r.success).length;
     const failed = this.results.filter(r => !r.success).length;
 
-    let message = `ud83euddea *Automated Test Suite*\n\n`;
-    message += `Running ${completed}/${total} tests...\n`;
-    message += `u2705 Passed: ${passed}\n`;
-    message += `u274c Failed: ${failed}\n\n`;
+    // Using plain text rather than formatting to avoid Telegram parsing errors
+    let message = `🧪 Automated Test Suite
+
+`;
+    message += `Running ${completed}/${total} tests...
+`;
+    message += `✅ Passed: ${passed}
+`;
+    message += `❌ Failed: ${failed}
+
+`;
 
     // Show current test results
     if (this.results.length > 0) {
-      message += `*Recent Results:*\n`;
+      message += `Recent Results:
+`;
       // Show the last 5 tests or fewer if we haven't run that many
       const recentTests = this.results.slice(Math.max(0, this.results.length - 5));
       for (const result of recentTests) {
-        const icon = result.success ? 'u2705' : 'u274c';
-        message += `${icon} ${result.testName}${result.error ? `: ${result.error}` : ''}\n`;
+        const icon = result.success ? '✅' : '❌';
+        message += `${icon} ${result.testName}${result.error ? `: ${result.error}` : ''}
+`;
       }
     }
 
+    // Sanitize the message to prevent formatting errors
+    const safeText = this.sanitizeMessage(message);
+
     try {
-      await bot.editMessageText(message, {
+      await bot.editMessageText(safeText, {
         chat_id: this.chatId,
         message_id: this.testMessage.message_id,
-        parse_mode: 'Markdown'
+        parse_mode: undefined, // Don't use parse_mode to avoid formatting issues
       });
     } catch (error) {
       console.error('Error updating test status message:', error);
@@ -355,6 +396,30 @@ export class TestRunner {
   }
 
   /**
+   * Test the /tutorial command
+   */
+  private async testTutorialCommand(): Promise<void> {
+    try {
+      // Create a mock message
+      const mockMsg: Partial<TelegramBot.Message> = {
+        chat: { id: this.chatId, type: 'private' },
+        from: { id: this.chatId, first_name: 'Test', is_bot: false },
+        message_id: 0,
+        date: Math.floor(Date.now() / 1000)
+      };
+
+      // Use a private utility to simulate sending a command
+      await this.simulateCommand('/tutorial', mockMsg as TelegramBot.Message);
+      
+      // This test passes if no exception was thrown
+      await this.recordTestResult('Tutorial Command', true);
+    } catch (error) {
+      console.error('Error testing tutorial command:', error);
+      await this.recordTestResult('Tutorial Command', false, error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  /**
    * Utility method to simulate a command being sent to the bot
    * This avoids having to actually send messages to Telegram during testing
    */
@@ -363,19 +428,63 @@ export class TestRunner {
       // Log the test attempt
       console.log(`Testing command: ${command}`);
       
-      // Generate the appropriate command handler name
-      const handlerName = `handle${command.substring(1).charAt(0).toUpperCase() + command.substring(2)}Command`;
+      // Generate the appropriate command handler name, handling hyphens and underscores
+      // First, clean the command name by removing leading slash and converting hyphens to underscores
+      const cleanCommandName = command.substring(1).replace(/-/g, '_');
       
-      // Import the commands handlers dynamically
-      const commandHandlers = await import('../commands-handlers');
+      // Convert to camelCase format expected for handler functions
+      const formattedName = cleanCommandName.split('_')
+        .map((part, index) => index === 0 ? part : part.charAt(0).toUpperCase() + part.slice(1))
+        .join('');
       
-      // Use type assertion for dynamic property access
-      const handler = commandHandlers[handlerName as keyof typeof commandHandlers] as ((msg: TelegramBot.Message) => Promise<void>) | undefined;
+      // Create the handler function name
+      const handlerName = `handle${formattedName.charAt(0).toUpperCase() + formattedName.slice(1)}Command`;
       
-      if (typeof handler === 'function') {
-        // Call the handler function directly
-        await handler(mockMsg);
-        return;
+      console.log(`Looking for handler function: ${handlerName}`);
+      
+      // Try importing from commands-handlers first
+      try {
+        const commandHandlers = await import('../commands-handlers');
+        const handler = commandHandlers[handlerName as keyof typeof commandHandlers] as ((msg: TelegramBot.Message) => Promise<void>) | undefined;
+        
+        if (typeof handler === 'function') {
+          await handler(mockMsg);
+          return;
+        }
+      } catch (importError) {
+        console.log(`Handler not found in commands-handlers, trying individual files`);
+      }
+      
+      // If not found, try importing from individual module files
+      try {
+        // Handle special cases for commands in their own files
+        if (cleanCommandName === 'language') {
+          const { handleLanguageCommand } = await import('../language-handler');
+          await handleLanguageCommand(mockMsg);
+          return;
+        } else if (cleanCommandName === 'tutorial') {
+          const { handleTutorialCommand } = await import('../tutorial');
+          await handleTutorialCommand(mockMsg);
+          return;
+        } else if (cleanCommandName === 'info') {
+          const { handleInfoCommand } = await import('../info-command');
+          await handleInfoCommand(mockMsg);
+          return;
+        } else if (cleanCommandName === 'pay_now') {
+          const { handlePayNowCommand } = await import('../pay-now-command');
+          await handlePayNowCommand(mockMsg);
+          return;
+        } else if (cleanCommandName === 'withdraw') {
+          const { handleWithdrawCommand } = await import('../withdraw-command');
+          await handleWithdrawCommand(mockMsg);
+          return;
+        } else if (cleanCommandName === 'analytics') {
+          const { handleAnalyticsCommand } = await import('../analytics-service');
+          await handleAnalyticsCommand(mockMsg);
+          return;
+        }
+      } catch (moduleError) {
+        console.log(`Error importing from module file: ${moduleError}`);
       }
       
       if (!expectReply) {
@@ -427,7 +536,7 @@ export async function handleTestResultsCommand(msg: TelegramBot.Message): Promis
     const results = await getTestResults(chatId);
     
     if (!results || results.length === 0) {
-      await bot.sendMessage(chatId, 'ud83dudcca No test results found. Run /test to execute the test suite.');
+      await bot.sendMessage(chatId, '📊 No test results found. Run /test to execute the test suite.');
       return;
     }
     
@@ -435,23 +544,33 @@ export async function handleTestResultsCommand(msg: TelegramBot.Message): Promis
     const passed = results.filter(r => r.success).length;
     const failed = total - passed;
     
-    let message = `ud83dudcca *Test Results*\n\n`;
-    message += `Total Tests: ${total}\n`;
-    message += `u2705 Passed: ${passed}\n`;
-    message += `u274c Failed: ${failed}\n\n`;
+    // Using plain text formatting to avoid Telegram parsing errors
+    let message = `📊 Test Results
+
+`;
+    message += `Total Tests: ${total}
+`;
+    message += `✅ Passed: ${passed}
+`;
+    message += `❌ Failed: ${failed}
+
+`;
     
-    message += `*Last 10 Test Results:*\n`;
+    message += `Last 10 Test Results:
+`;
     const recentTests = results.slice(Math.max(0, results.length - 10));
     
     for (const result of recentTests) {
-      const icon = result.success ? 'u2705' : 'u274c';
+      const icon = result.success ? '✅' : '❌';
       const time = new Date(result.timestamp).toLocaleString();
-      message += `${icon} ${result.testName}${result.error ? `: ${result.error}` : ''} - ${time}\n`;
+      message += `${icon} ${result.testName}${result.error ? `: ${result.error}` : ''} - ${time}
+`;
     }
     
-    await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+    // Don't use parse_mode to avoid Telegram entity parsing errors
+    await bot.sendMessage(chatId, message);
   } catch (error) {
     console.error('Error retrieving test results:', error);
-    await bot.sendMessage(chatId, 'u274c Error retrieving test results.');
+    await bot.sendMessage(chatId, '❌ Error retrieving test results.');
   }
 }
