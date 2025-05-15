@@ -200,8 +200,16 @@ export class AnalyticsService {
 
 /**
  * Handle the /analytics command
+ * Admin-only command to view the analytics dashboard
  */
 export async function handleAnalyticsCommand(msg: TelegramBot.Message): Promise<void> {
   const chatId = msg.chat.id;
+  
+  // Ensure only admins can access this command
+  if (!isAdmin(chatId)) {
+    console.log(`[ADMIN] Unauthorized access attempt to /analytics by user ${chatId}`);
+    return; // Silently fail for non-admins - don't even acknowledge the command
+  }
+  
   await AnalyticsService.displayAnalytics(chatId, 'day');
 }
