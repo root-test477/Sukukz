@@ -64,12 +64,15 @@ export class TestRunner {
    */
   async runAllTests(): Promise<void> {
     if (this.isRunning) {
-      await bot.sendMessage(this.chatId, 'u26a0ufe0f Tests are already running');
+      await bot.sendMessage(this.chatId, '[ALERT] Tests are already running');
       return;
     }
 
     this.isRunning = true;
+    
+    // Clear any previous test results from memory and storage
     this.results = [];
+    console.log(`[TEST] Clearing previous test results for chat ${this.chatId}`);
     await clearTestResults(this.chatId);
 
     try {
