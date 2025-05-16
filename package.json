@@ -10,20 +10,23 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
-    "lint": "eslint . --ext .ts"
+    "lint": "eslint . --ext .ts",
+    "lint:fix": "eslint . --ext .ts --fix"
   },
   "dependencies": {
     "@tonconnect/sdk": "^3.0.0-beta.1",
     "dotenv": "^16.0.3",
     "node-telegram-bot-api": "^0.61.0",
     "qrcode": "^1.5.1",
-    "redis": "^4.6.5"
+    "redis": "^4.6.5",
+    "winston": "^3.8.2",
+    "redis-mock": "^0.56.3"
   },
   "engines": {
     "node": "18.x"
   },
   "devDependencies": {
-    "@types/jest": "^29.5.1",
+    "@types/jest": "^29.5.0",
     "@types/node-telegram-bot-api": "^0.61.4",
     "@types/qrcode": "^1.5.0",
     "@typescript-eslint/eslint-plugin": "^5.38.1",
@@ -35,17 +38,10 @@
     "eslint-plugin-prettier": "^4.2.1",
     "eslint-plugin-unused-imports": "^2.0.0",
     "jest": "^29.5.0",
+    "ts-jest": "^29.1.0",
     "pm2": "^5.2.2",
     "prettier": "^2.7.1",
     "rimraf": "^3.0.2",
-    "ts-jest": "^29.1.0",
     "typescript": "^4.9.5"
-  },
-  "jest": {
-    "preset": "ts-jest",
-    "testEnvironment": "node",
-    "testMatch": ["**/tests/**/*.test.ts"],
-    "collectCoverageFrom": ["src/**/*.ts"],
-    "coveragePathIgnorePatterns": ["/node_modules/", "/dist/"]
   }
 }
