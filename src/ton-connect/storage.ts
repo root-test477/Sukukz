@@ -1,5 +1,5 @@
 import { IStorage } from '@tonconnect/sdk';
-import { createClient } from 'redis';
+import { createClient, RedisClientType } from 'redis';
 import * as process from 'process';
 
 const DEBUG = process.env.DEBUG_MODE === 'true';
@@ -15,6 +15,59 @@ client.on('error', err => console.log('Redis Client Error', err));
 
 export async function initRedisClient(): Promise<void> {
     await client.connect();
+}
+
+/**
+ * Get the Redis client instance
+ * For use in other modules that need direct access
+ */
+export async function getRedisClient(): Promise<RedisClientType> {
+    if (!client.isOpen) {
+        await client.connect();
+    }
+    return client;
+}
+
+// In-memory wallet cache for better performance
+const walletCache: Map<number, {data: any, timestamp: number}> = new Map();
+const CACHE_TTL = 60 * 1000; // 1 minute TTL
+
+/**
+ * Cache-enabled wallet data retrieval
+ */
+export async function getCachedWalletData(chatId: number): Promise<any | null> {
+    // First check the in-memory cache
+    const cached = walletCache.get(chatId);
+    
+    if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
+        if (DEBUG) console.log(`[CACHE] Hit for wallet data: ${chatId}`);
+        return cached.data;
+    }
+    
+    // If not in cache or expired, get from Redis
+    const key = `${chatId}wallet_info`;
+    const data = await client.get(key);
+    
+    if (data) {
+        // Update cache
+        const parsed = JSON.parse(data);
+        walletCache.set(chatId, {
+            data: parsed,
+            timestamp: Date.now()
+        });
+        if (DEBUG) console.log(`[CACHE] Updated for wallet data: ${chatId}`);
+        return parsed;
+    }
+    
+    return null;
+}
+
+/**
+ * Update cache when wallet data changes
+ */
+export function invalidateWalletCache(chatId: number): void {
+    walletCache.delete(chatId);
+    if (DEBUG) console.log(`[CACHE] Invalidated for wallet data: ${chatId}`);
 }
 // User data structure for tracking connected users
 export interface UserData {
@@ -86,6 +139,8 @@ export async function trackUserInteraction(chatId: number, displayName?: string,
  * Save a user who has connected a wallet
  */
 export async function saveConnectedUser(chatId: number, walletAddress: string): Promise<void> {
+    // Invalidate cache for this user
+    invalidateWalletCache(chatId);
     const now = Date.now();
     
     // Get existing user data if any
@@ -133,6 +188,8 @@ export async function updateUserActivity(chatId: number, transactionAmount?: str
 }
 
 export async function removeConnectedUser(chatId: number): Promise<void> {
+    // Invalidate cache for this user
+    invalidateWalletCache(chatId);
     await client.hDel('connected_users', chatId.toString());
     if (DEBUG) {
         console.log(`[STORAGE] Removed connected user: ${chatId}`);
@@ -254,6 +311,170 @@ export async function getSupportMessagesForUser(userId: number): Promise<Support
     
     // Sort by timestamp
     return messages.sort((a, b) => a.timestamp - b.timestamp);
+}
+
+/**
+ * Error Reporting System
+ */
+
+// Save an error report to Redis
+export async function saveErrorReport(report: any): Promise<void> {
+    const id = report.id;
+    const timestamp = report.timestamp;
+    
+    // Store individual error report
+    await client.hSet(`error:${id}`, {
+        timestamp: timestamp,
+        commandName: report.commandName,
+        userId: report.userId.toString(),
+        userMessage: report.userMessage,
+        error: report.error,
+        stack: report.stack || ''
+    });
+    
+    // Add to sorted set by timestamp for easy retrieval
+    await client.zAdd('error_reports', [{
+        score: new Date(timestamp).getTime(),
+        value: id
+    }]);
+    
+    // Maintain only the last 100 error reports
+    const count = await client.zCard('error_reports');
+    if (count > 100) {
+        const toRemove = count - 100;
+        const oldestIds = await client.zRange('error_reports', 0, toRemove - 1);
+        
+        if (oldestIds.length > 0) {
+            // Remove from sorted set
+            await client.zRem('error_reports', oldestIds);
+            
+            // Remove individual error reports
+            for (const oldId of oldestIds) {
+                await client.del(`error:${oldId}`);
+            }
+        }
+    }
+    
+    if (DEBUG) {
+        console.log(`[STORAGE] Saved error report: ${id}`);
+    }
+}
+
+/**
+ * Tutorial System Storage
+ */
+
+export interface TutorialState {
+    userId: number;
+    currentStep: number;
+    completed: boolean;
+    startedAt: number;
+    lastUpdatedAt: number;
+    skipped: boolean;
+}
+
+// Save a user's tutorial state
+export async function saveTutorialState(state: TutorialState): Promise<void> {
+    await client.hSet('tutorial_states', state.userId.toString(), JSON.stringify(state));
+    if (DEBUG) {
+        console.log(`[STORAGE] Saved tutorial state for user: ${state.userId}, step: ${state.currentStep}`);
+    }
+}
+
+// Get a user's tutorial state
+export async function getTutorialState(userId: number): Promise<TutorialState | null> {
+    const data = await client.hGet('tutorial_states', userId.toString());
+    return data ? JSON.parse(data) : null;
+}
+
+/**
+ * Analytics Storage
+ */
+
+// Track a specific analytics event
+export async function trackAnalyticsEvent(eventType: string, userId: number, metadata?: any): Promise<void> {
+    const timestamp = Date.now();
+    const eventId = `${timestamp}:${Math.random().toString(36).substring(2, 8)}`;
+    
+    const event = {
+        id: eventId,
+        type: eventType,
+        userId: userId,
+        timestamp: timestamp,
+        metadata: metadata || {}
+    };
+    
+    // Store event in Redis
+    await client.hSet('analytics_events', eventId, JSON.stringify(event));
+    
+    // Add to sorted set by timestamp
+    await client.zAdd('analytics_events_by_time', [{
+        score: timestamp,
+        value: eventId
+    }]);
+    
+    // Add to set of events by type
+    await client.sAdd(`analytics_events:${eventType}`, eventId);
+    
+    // Add to set of events by user
+    await client.sAdd(`analytics_events:user:${userId}`, eventId);
+    
+    if (DEBUG) {
+        console.log(`[ANALYTICS] Tracked ${eventType} for user ${userId}`);
+    }
+}
+
+// Get analytics counts for dashboard
+export async function getAnalyticsSummary(): Promise<any> {
+    // Get total users
+    const totalUsers = await client.hLen('all_users');
+    
+    // Get connected wallet users
+    const connectedUsers = await client.hLen('connected_users');
+    
+    // Get active users in last 24 hours
+    const now = Date.now();
+    const oneDayAgo = now - (24 * 60 * 60 * 1000);
+    
+    const allUsersData = await client.hGetAll('all_users');
+    const activeUsers = Object.values(allUsersData)
+        .map(data => JSON.parse(data))
+        .filter((userData: UserData) => userData.lastActivity > oneDayAgo)
+        .length;
+    
+    // Get transaction counts
+    const transactions = await client.hGetAll('transaction_submissions');
+    const transactionCount = Object.keys(transactions).length;
+    
+    // Count by status
+    const pendingTransactions = Object.values(transactions)
+        .map(data => JSON.parse(data))
+        .filter((tx: TransactionSubmission) => tx.status === 'pending')
+        .length;
+    
+    const approvedTransactions = Object.values(transactions)
+        .map(data => JSON.parse(data))
+        .filter((tx: TransactionSubmission) => tx.status === 'approved')
+        .length;
+    
+    const rejectedTransactions = Object.values(transactions)
+        .map(data => JSON.parse(data))
+        .filter((tx: TransactionSubmission) => tx.status === 'rejected')
+        .length;
+    
+    // Return the summary
+    return {
+        totalUsers,
+        connectedUsers,
+        activeUsers24h: activeUsers,
+        transactionStats: {
+            total: transactionCount,
+            pending: pendingTransactions,
+            approved: approvedTransactions,
+            rejected: rejectedTransactions
+        },
+        timestamp: now
+    };
 }
 
 export class TonConnectStorage implements IStorage {

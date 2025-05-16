@@ -1,100 +1,80 @@
 import TelegramBot from 'node-telegram-bot-api';
 import { bot } from '../bot';
 import { Command } from './base-command';
-import { ErrorHandler, ErrorType } from '../error-handler';
 
 /**
  * Registry for all bot commands
+ * Centralizes command registration and execution
  */
 export class CommandRegistry {
-    private static instance: CommandRegistry;
     private commands: Map<string, Command> = new Map();
+    private commandCallbacks: Map<string, (msg: TelegramBot.Message, match?: RegExpMatchArray | null) => Promise<void>> = new Map();
     
     /**
-     * Get the singleton instance of the registry
+     * Register a command with the registry
      */
-    public static getInstance(): CommandRegistry {
-        if (!CommandRegistry.instance) {
-            CommandRegistry.instance = new CommandRegistry();
+    register(command: Command): void {
+        // Don't register duplicate commands
+        if (this.commands.has(command.name)) {
+            console.warn(`Command '${command.name}' is already registered.`);
+            return;
         }
-        return CommandRegistry.instance;
-    }
-    
-    /**
-     * Private constructor to enforce singleton pattern
-     */
-    private constructor() {}
-    
-    /**
-     * Register a command with the bot
-     * @param command Command to register
-     */
-    public registerCommand(command: Command): void {
-        // Add to the command map
-        this.commands.set(command.name, command);
         
-        // Register the command with the bot
-        bot.onText(command.getRegexPattern(), async (msg, match) => {
-            try {
-                await command.execute(msg, match);
-            } catch (error) {
-                // Handle any errors that weren't caught by the command's own error handling
-                ErrorHandler.handleError({
-                    type: ErrorType.COMMAND_HANDLER,
-                    message: error instanceof Error ? error.message : String(error),
-                    command: command.name,
-                    userId: msg.from?.id,
-                    timestamp: Date.now(),
-                    stack: error instanceof Error ? error.stack : undefined
-                });
-            }
-        });
-    }
-    
-    /**
-     * Register multiple commands at once
-     * @param commands Array of commands to register
-     */
-    public registerCommands(commands: Command[]): void {
-        for (const command of commands) {
-            this.registerCommand(command);
+        this.commands.set(command.name, command);
+        // Store the handler that includes error handling
+        if ('handler' in command) {
+            this.commandCallbacks.set(command.name, (command as any).handler);
+        } else {
+            // Fallback if the command doesn't have a handler method
+            this.commandCallbacks.set(command.name, async (msg, match) => {
+                const args = match && match[1] ? match[1].split(' ').filter(arg => arg.length > 0) : [];
+                await command.execute(msg, args);
+            });
         }
     }
     
     /**
      * Get a command by name
-     * @param name Command name
      */
-    public getCommand(name: string): Command | undefined {
+    getCommand(name: string): Command | undefined {
         return this.commands.get(name);
     }
     
     /**
      * Get all registered commands
      */
-    public getAllCommands(): Command[] {
+    getAllCommands(): Command[] {
         return Array.from(this.commands.values());
     }
     
     /**
-     * Get all commands that match a specific filter
-     * @param filter Function to filter commands
+     * Register all commands with the Telegram bot
      */
-    public getFilteredCommands(filter: (command: Command) => boolean): Command[] {
-        return this.getAllCommands().filter(filter);
+    registerWithBot(): void {
+        for (const [name, command] of this.commands.entries()) {
+            const callback = this.commandCallbacks.get(name);
+            if (callback) {
+                bot.onText(new RegExp(`^\\/${name}(?:\\s+(.+))?$`), callback);
+                console.log(`Registered command: /${name}`);
+            }
+        }
     }
     
     /**
-     * Get all user commands (non-admin commands)
+     * Set up commands list in Telegram
      */
-    public getUserCommands(): Command[] {
-        return this.getFilteredCommands(command => !command.adminOnly);
-    }
-    
-    /**
-     * Get all admin commands
-     */
-    public getAdminCommands(): Command[] {
-        return this.getFilteredCommands(command => command.adminOnly);
+    async setupCommandsList(): Promise<void> {
+        try {
+            const commandsList = Array.from(this.commands.values())
+                .map(cmd => ({
+                    command: cmd.name,
+                    description: cmd.description
+                }));
+            
+            await bot.setMyCommands(commandsList);
+            console.log('Command list updated in Telegram');
+        } catch (error) {
+            console.error('Failed to set commands list:', error);
+        }
     }
 }

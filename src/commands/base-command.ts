@@ -1,122 +1,72 @@
 import TelegramBot from 'node-telegram-bot-api';
 import { bot } from '../bot';
-import { ErrorHandler, ErrorType } from '../error-handler';
+import { withErrorHandling } from '../error-handler';
 import { isAdmin } from '../utils';
 
 /**
  * Base command interface that all commands must implement
  */
 export interface Command {
-    /**
-     * The command name without the slash
-     */
-    readonly name: string;
-    
-    /**
-     * Determine if the command is admin-only
-     */
-    readonly adminOnly: boolean;
-    
-    /**
-     * Execute the command
-     * @param msg The Telegram message that triggered the command
-     * @param match The regex match results (if any)
-     */
-    execute(msg: TelegramBot.Message, match?: RegExpExecArray | null): Promise<void>;
-    
-    /**
-     * Get the regex pattern to match this command
-     */
-    getRegexPattern(): RegExp;
-    
-    /**
-     * Returns the command description for help text
-     */
-    getDescription(): string;
+    name: string;
+    description: string;
+    execute(msg: TelegramBot.Message, args?: string[]): Promise<void>;
 }
 
 /**
- * Base abstract class for commands
+ * Base class for all bot commands
  */
 export abstract class BaseCommand implements Command {
-    /**
-     * @param name The command name without the slash
-     * @param adminOnly Whether the command is admin-only
-     * @param description Brief description of what the command does
-     */
     constructor(
         public readonly name: string,
-        public readonly adminOnly: boolean,
-        private readonly description: string
+        public readonly description: string
     ) {}
     
-    /**
-     * Default implementation for getting the regex pattern
-     * Override this method if you need a custom pattern
-     */
-    getRegexPattern(): RegExp {
-        return new RegExp(`\\/${this.name}(?:\\s+(.*))?`);
-    }
+    abstract execute(msg: TelegramBot.Message, args?: string[]): Promise<void>;
     
     /**
-     * Get the command description
+     * Create an error-handled version of this command's execute method
      */
-    getDescription(): string {
-        return this.description;
-    }
-    
-    /**
-     * Main execution method wrapped with error handling
-     */
-    async execute(msg: TelegramBot.Message, match?: RegExpExecArray | null): Promise<void> {
-        try {
-            // Check if admin-only and user is not an admin
-            if (this.adminOnly && !isAdmin(msg.chat.id)) {
-                await this.handleUnauthorized(msg);
-                return;
-            }
-            
-            // Execute the command implementation
-            await this.executeCommand(msg, match);
-        } catch (error) {
-            // Handle any errors
-            ErrorHandler.handleError({
-                type: ErrorType.COMMAND_HANDLER,
-                message: error instanceof Error ? error.message : String(error),
-                command: this.name,
-                userId: msg.from?.id,
-                timestamp: Date.now(),
-                stack: error instanceof Error ? error.stack : undefined
-            });
-            
-            // Send error message to user
-            await this.handleError(msg, error);
-        }
-    }
-    
-    /**
-     * Command implementation
-     * Must be implemented by subclasses
-     */
-    protected abstract executeCommand(msg: TelegramBot.Message, match?: RegExpExecArray | null): Promise<void>;
-    
-    /**
-     * Handle unauthorized access (admin-only commands)
-     * Silently fails without sending any message to user
-     */
-    protected async handleUnauthorized(_msg: TelegramBot.Message): Promise<void> {
-        // Silently ignore unauthorized access attempts
-        // No message is sent to avoid revealing admin commands exist
-        return;
-    }
-    
-    /**
-     * Handle command execution errors
-     */
-    protected async handleError(msg: TelegramBot.Message, _error: unknown): Promise<void> {
-        await bot.sendMessage(
-            msg.chat.id,
-            `⚠️ Sorry, an error occurred while processing the /${this.name} command. Please try again later.`
+    get handler(): (msg: TelegramBot.Message, match?: RegExpMatchArray | null) => Promise<void> {
+        return withErrorHandling(
+            async (msg: TelegramBot.Message, match?: RegExpMatchArray | null) => {
+                const args = match && match[1] ? match[1].split(' ').filter(arg => arg.length > 0) : [];
+                await this.execute(msg, args);
+            },
+            this.name
         );
     }
+}
+
+/**
+ * Admin-only command that checks for admin privileges before executing
+ */
+export abstract class AdminCommand extends BaseCommand {
+    async execute(msg: TelegramBot.Message, args?: string[]): Promise<void> {
+        const chatId = msg.chat.id;
+        
+        if (!isAdmin(chatId)) {
+            await bot.sendMessage(chatId, 'This command is for admins only.');
+            return;
+        }
+        
+        await this.executeAdmin(msg, args);
+    }
+    
+    abstract executeAdmin(msg: TelegramBot.Message, args?: string[]): Promise<void>;
+}
+
+/**
+ * Wallet-required command that checks for connected wallet before executing
+ */
+export abstract class WalletRequiredCommand extends BaseCommand {
+    async execute(msg: TelegramBot.Message, args?: string[]): Promise<void> {
+        const chatId = msg.chat.id;
+        
+        // Check if user has connected wallet logic would go here
+        // For now, we'll implement this in the actual commands
+        
+        await this.executeWithWallet(msg, args);
+    }
+    
+    abstract executeWithWallet(msg: TelegramBot.Message, args?: string[]): Promise<void>;
 }

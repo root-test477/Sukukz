@@ -74,54 +74,26 @@ function getConnector(chatId, onConnectorExpired) {
         if (DEBUG) {
             console.log(`[CONNECTOR] Creating new connector for chatId: ${chatId}`);
         }
-        // Log the manifest URL for debugging
-        if (DEBUG) {
-            console.log(`[CONNECTOR] Using manifest URL: ${process.env.MANIFEST_URL}`);
-        }
-        try {
-            storedItem = {
-                connector: new sdk_1.default({
-                    manifestUrl: process.env.MANIFEST_URL,
-                    storage: new storage_1.TonConnectStorage(chatId)
-                }),
-                onConnectorExpired: []
-            };
-        }
-        catch (error) {
-            console.error('[CONNECTOR] Error creating connector:', error);
-            // Create a fallback connector anyway to avoid runtime errors
-            storedItem = {
-                connector: new sdk_1.default({
-                    manifestUrl: process.env.MANIFEST_URL,
-                    storage: new storage_1.TonConnectStorage(chatId)
-                }),
-                onConnectorExpired: []
-            };
-        }
+        storedItem = {
+            connector: new sdk_1.default({
+                manifestUrl: process.env.MANIFEST_URL,
+                storage: new storage_1.TonConnectStorage(chatId)
+            }),
+            onConnectorExpired: []
+        };
     }
     if (onConnectorExpired) {
         storedItem.onConnectorExpired.push(onConnectorExpired);
     }
-    // Create connector TTL
-    const TTL = process.env.CONNECTOR_TTL_MS
-        ? parseInt(process.env.CONNECTOR_TTL_MS)
-        : 10 * 60 * 1000; // 10 minutes by default
     storedItem.timeout = setTimeout(() => {
-        if (DEBUG) {
-            console.log(`[CONNECTOR] Connector TTL expired for chatId: ${chatId}`);
+        if (connectors.has(chatId)) {
+            const storedItem = connectors.get(chatId);
+            storedItem.connector.pauseConnection();
+            storedItem.onConnectorExpired.forEach(callback => callback(storedItem.connector));
+            connectors.delete(chatId);
         }
-        storedItem.onConnectorExpired.forEach(cb => cb(storedItem.connector));
-        connectors.delete(chatId);
-    }, TTL);
+    }, Number(process.env.CONNECTOR_TTL_MS));
     connectors.set(chatId, storedItem);
-    // Add event listeners for debugging
-    if (DEBUG) {
-        storedItem.connector.onStatusChange((status) => {
-            console.log(`[CONNECTOR] Status changed for chatId: ${chatId}, status:`, status);
-        });
-        // Log initial connection state
-        console.log(`[CONNECTOR] Initial connection state for chatId: ${chatId}:`, storedItem.connector.connected ? 'Connected' : 'Disconnected');
-    }
     if (DEBUG) {
         console.log(`[CONNECTOR] Returning connector for chatId: ${chatId}, connected: ${storedItem.connector.connected}`);
     }

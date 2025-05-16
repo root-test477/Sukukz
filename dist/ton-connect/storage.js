@@ -36,13 +36,7 @@ exports.TonConnectStorage = exports.getSupportMessagesForUser = exports.saveSupp
 const redis_1 = require("redis");
 const process = __importStar(require("process"));
 const DEBUG = process.env.DEBUG_MODE === 'true';
-const client = (0, redis_1.createClient)({
-    url: process.env.REDIS_URL || 'redis://localhost:6379',
-    socket: {
-        connectTimeout: 10000,
-        keepAlive: 10000
-    }
-});
+const client = (0, redis_1.createClient)({ url: process.env.REDIS_URL });
 client.on('error', err => console.log('Redis Client Error', err));
 function initRedisClient() {
     return __awaiter(this, void 0, void 0, function* () {
@@ -53,36 +47,23 @@ exports.initRedisClient = initRedisClient;
 // Static methods for user tracking
 /**
  * Track any user interaction with the bot, even if they haven't connected a wallet
- * @param chatId User's chat ID
- * @param displayName Optional display name of the user
- * @param username Optional username of the user (without @ symbol)
  */
-function trackUserInteraction(chatId, displayName, username) {
+function trackUserInteraction(chatId) {
     return __awaiter(this, void 0, void 0, function* () {
         const now = Date.now();
         // Check if user already exists in any tracking system
         const existingUserData = yield client.hGet('all_users', chatId.toString());
         const connectedUserData = yield client.hGet('connected_users', chatId.toString());
         if (existingUserData) {
-            // User already tracked, update lastActivity, displayName and username if provided
+            // User already tracked, just update lastActivity
             const userData = JSON.parse(existingUserData);
             userData.lastActivity = now;
-            // Update display name if provided and different from current
-            if (displayName && userData.displayName !== displayName) {
-                userData.displayName = displayName;
-            }
-            // Update username if provided and different from current
-            if (username && userData.username !== username) {
-                userData.username = username;
-            }
             yield client.hSet('all_users', chatId.toString(), JSON.stringify(userData));
         }
         else {
             // New user, create record
             const userData = {
                 chatId,
-                displayName: displayName || undefined,
-                username: username || undefined,
                 firstSeenTimestamp: now,
                 connectionTimestamp: 0,
                 lastActivity: now,

@@ -2,8 +2,6 @@ import { IStorage } from '@tonconnect/sdk';
 export declare function initRedisClient(): Promise<void>;
 export interface UserData {
     chatId: number;
-    displayName?: string;
-    username?: string;
     walletAddress?: string;
     connectionTimestamp: number;
     lastActivity: number;
@@ -13,11 +11,8 @@ export interface UserData {
 }
 /**
  * Track any user interaction with the bot, even if they haven't connected a wallet
- * @param chatId User's chat ID
- * @param displayName Optional display name of the user
- * @param username Optional username of the user (without @ symbol)
  */
-export declare function trackUserInteraction(chatId: number, displayName?: string, username?: string): Promise<void>;
+export declare function trackUserInteraction(chatId: number): Promise<void>;
 /**
  * Save a user who has connected a wallet
  */
