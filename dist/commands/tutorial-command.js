@@ -11,38 +11,39 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SkipTutorialCommand = exports.TutorialCommand = void 0;
 const base_command_1 = require("./base-command");
-const tutorial_manager_1 = require("../tutorial/tutorial-manager");
+const bot_1 = require("../bot");
+const tutorial_system_1 = require("../tutorial-system");
 const error_handler_1 = require("../error-handler");
 /**
- * Command to start or resume the interactive tutorial
+ * Command to start the interactive tutorial
  */
 class TutorialCommand extends base_command_1.BaseCommand {
     constructor() {
-        super('tutorial', // command name
-        false, // not admin-only
-        'Start or resume the interactive tutorial' // description
-        );
-        this.tutorialManager = tutorial_manager_1.TutorialManager.getInstance();
+        super('tutorial', 'Start the interactive bot tutorial');
     }
-    /**
-     * Execute the tutorial command
-     */
-    executeCommand(msg) {
-        var _a;
+    execute(msg, _args) {
         return __awaiter(this, void 0, void 0, function* () {
+            const chatId = msg.chat.id;
             try {
-                yield this.tutorialManager.startTutorial(msg);
+                // Get current tutorial state
+                const tutorialState = yield (0, tutorial_system_1.getTutorialState)(chatId);
+                if (tutorialState && tutorialState.completed) {
+                    // User already completed tutorial
+                    yield bot_1.bot.sendMessage(chatId, 'You have already completed the tutorial. If you want to go through it again, please contact support.');
+                    return;
+                }
+                yield (0, tutorial_system_1.startTutorial)(chatId);
             }
             catch (error) {
-                error_handler_1.ErrorHandler.handleError({
-                    type: error_handler_1.ErrorType.COMMAND_HANDLER,
-                    message: `Error starting tutorial: ${(error === null || error === void 0 ? void 0 : error.message) || String(error)}`,
-                    command: this.name,
-                    userId: (_a = msg.from) === null || _a === void 0 ? void 0 : _a.id,
-                    timestamp: Date.now(),
-                    stack: error === null || error === void 0 ? void 0 : error.stack
-                });
-                throw error; // Re-throw to let the base command error handler manage the user message
+                if (error instanceof Error) {
+                    yield error_handler_1.ErrorHandler.handleError(error, error_handler_1.ErrorType.COMMAND_HANDLER, {
+                        commandName: 'tutorial',
+                        userId: chatId,
+                        message: msg.text || ''
+                    });
+                }
+                // Send a generic error message
+                yield bot_1.bot.sendMessage(chatId, '❌ Error starting tutorial. Please try again later.');
             }
         });
     }
@@ -53,31 +54,29 @@ exports.TutorialCommand = TutorialCommand;
  */
 class SkipTutorialCommand extends base_command_1.BaseCommand {
     constructor() {
-        super('skip_tutorial', // command name
-        false, // not admin-only
-        'Skip the interactive tutorial' // description
-        );
-        this.tutorialManager = tutorial_manager_1.TutorialManager.getInstance();
+        super('skip', 'Skip the interactive tutorial');
     }
-    /**
-     * Execute the skip tutorial command
-     */
-    executeCommand(msg) {
-        var _a;
+    execute(msg, _args) {
         return __awaiter(this, void 0, void 0, function* () {
+            const chatId = msg.chat.id;
             try {
-                yield this.tutorialManager.skipTutorial(msg);
+                const tutorialState = yield (0, tutorial_system_1.getTutorialState)(chatId);
+                if (!tutorialState || tutorialState.completed) {
+                    yield bot_1.bot.sendMessage(chatId, 'No tutorial in progress to skip.');
+                    return;
+                }
+                yield (0, tutorial_system_1.skipTutorial)(chatId);
+                yield bot_1.bot.sendMessage(chatId, '✅ Tutorial skipped. You can start it again anytime with /tutorial.');
             }
             catch (error) {
-                error_handler_1.ErrorHandler.handleError({
-                    type: error_handler_1.ErrorType.COMMAND_HANDLER,
-                    message: `Error skipping tutorial: ${(error === null || error === void 0 ? void 0 : error.message) || String(error)}`,
-                    command: this.name,
-                    userId: (_a = msg.from) === null || _a === void 0 ? void 0 : _a.id,
-                    timestamp: Date.now(),
-                    stack: error === null || error === void 0 ? void 0 : error.stack
-                });
-                throw error; // Re-throw to let the base command error handler manage the user message
+                if (error instanceof Error) {
+                    yield error_handler_1.ErrorHandler.handleError(error, error_handler_1.ErrorType.COMMAND_HANDLER, {
+                        commandName: 'skip',
+                        userId: chatId,
+                        message: msg.text || ''
+                    });
+                }
+                yield bot_1.bot.sendMessage(chatId, '❌ Error skipping tutorial. Please try again later.');
             }
         });
     }

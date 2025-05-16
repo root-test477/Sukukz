@@ -1,297 +1,177 @@
-import { BaseCommand } from './base-command';
 import TelegramBot from 'node-telegram-bot-api';
+import { BaseCommand } from './base-command';
 import { bot } from '../bot';
-import { isAdmin } from '../utils';
-import { createClient } from 'redis';
+import { ErrorHandler, ErrorType } from '../error-handler';
+import { saveSupportMessage, getSupportMessages, getSupportMessagesForUser } from '../ton-connect/storage';
 
-// Redis client
-const redisClient = createClient({
-  url: process.env.REDIS_URL || 'redis://localhost:6379',
-  socket: {
-    connectTimeout: 10000,
-    keepAlive: 10000
-  }
-});
-
-redisClient.on('error', err => console.error('Redis Client Error in Support Command:', err));
-
-// Connect to Redis if not already connected
-async function getRedisClient() {
-  if (!redisClient.isOpen) {
-    await redisClient.connect();
-  }
-  return redisClient;
-}
-
-// Redis keys for support system
-const SUPPORT_THREAD_KEY = 'support:thread:';
-const SUPPORT_PENDING_KEY = 'support:pending';
-
+// Interface for support messages
 interface SupportMessage {
-  userId: number;
-  messageText: string | undefined;  // Allow undefined to fix TypeScript errors
-  timestamp: number;
-  userName?: string;
+    id: string;           // Message ID (timestamp + random string)
+    userId: number;      // User's chat ID
+    adminId?: number;    // Admin's chat ID (if response)
+    message: string;     // The message content
+    timestamp: number;   // When the message was sent
+    isResponse: boolean; // Whether this is a response from admin
 }
 
 /**
- * Command for handling user support requests
+ * Command to handle user support requests and admin responses
  */
 export class SupportCommand extends BaseCommand {
-  constructor() {
-    super('support', false, 'Contact support team or respond to support requests (admins only)');
-  }
-
-  protected async executeCommand(msg: TelegramBot.Message, _match?: RegExpExecArray | null): Promise<void> {
-    const chatId = msg.chat.id;
-    const userId = msg.from?.id;
-    const userName = msg.from?.username || msg.from?.first_name || 'Unknown User';
-    
-    if (!userId) {
-      await bot.sendMessage(chatId, '❌ Error: Could not identify user.');
-      return;
-    }
-
-    // Extract message content (everything after /support)
-    const messageContent = msg.text?.substring('/support'.length).trim();
-
-    if (isAdmin(userId)) {
-      // Admin using support command
-      await this.handleAdminSupport(chatId, userId, messageContent);
-    } else {
-      // Regular user using support command
-      await this.handleUserSupport(chatId, userId, userName, messageContent);
-    }
-  }
-
-  /**
-   * Handle support requests from regular users
-   */
-  private async handleUserSupport(
-    chatId: number,
-    userId: number,
-    userName: string,
-    messageContent?: string
-  ): Promise<void> {
-    if (!messageContent) {
-      await bot.sendMessage(
-        chatId,
-        '🔹 *Support System*\n\n' +
-        'To contact our support team, send your message using:\n' +
-        '`/support your message here`\n\n' +
-        'Our team will respond as soon as possible.',
-        { parse_mode: 'Markdown' }
-      );
-      return;
-    }
-
-    // Store the message in Redis
-    const redis = await getRedisClient();
-    const threadKey = `${SUPPORT_THREAD_KEY}${userId}`;
-    const message: SupportMessage = {
-      userId,
-      messageText: messageContent,
-      timestamp: Date.now(),
-      userName
-    };
-
-    // Add to user's thread
-    const messageJson = JSON.stringify(message);
-    await redis.rPush(threadKey, messageJson);
-    // Set TTL for thread (30 days)
-    await redis.expire(threadKey, 30 * 24 * 60 * 60);
-    
-    // Add to pending list if not already there
-    const isPending = await redis.sIsMember(SUPPORT_PENDING_KEY, userId.toString());
-    if (!isPending) {
-      await redis.sAdd(SUPPORT_PENDING_KEY, userId.toString());
-    }
-
-    // Notify all admins - ensure messageContent is definitely a string
-    await this.notifyAdmins(userId, userName, messageContent as string);
-
-    // Confirm receipt to user
-    await bot.sendMessage(
-      chatId,
-      '✅ Your message has been sent to our support team. We will respond as soon as possible.'
-    );
-  }
-
-  /**
-   * Handle admin responses to support requests
-   */
-  private async handleAdminSupport(
-    chatId: number,
-    adminId: number,
-    messageContent?: string
-  ): Promise<void> {
-    if (!messageContent) {
-      // Show list of pending support requests
-      await this.showPendingSupportRequests(chatId);
-      return;
-    }
-
-    // Parse admin command format: /support <userId> <message>
-    if (!messageContent) {
-      await bot.sendMessage(
-        chatId,
-        '❌ Please provide a user ID and message. Format: /support <userId> <message>'
-      );
-      return;
+    constructor() {
+        super('support', 'Send a message to support or respond to a user');
     }
     
-    // At this point, messageContent is guaranteed to be a string because of our earlier null check
-    // Use type assertion to inform TypeScript this is definitely a string
-    const parts = (messageContent as string).split(' ');
-    // Ensure we have a valid string for parseInt to avoid TypeScript errors
-    // Using a more explicit approach to handle the string for parseInt
-    // Type assertion directly on the parts[0] element to force it to be string
-    const firstPart = parts.length > 0 ? String(parts[0]) : '0';
-    // Now we have a guaranteed string that can be passed to parseInt
-    const targetUserId = parseInt(firstPart);
-    
-    if (isNaN(targetUserId)) {
-      await bot.sendMessage(
-        chatId,
-        '❌ Invalid format. Use `/support <userId> <message>` to respond to a user.'
-      );
-      return;
-    }
-
-    // Get the response message (everything after the user ID)
-    let responseMessage = '';
-    if (parts.length > 1) {
-      responseMessage = parts.slice(1).join(' ').trim();
-    }
-    if (!responseMessage) {
-      await bot.sendMessage(
-        chatId,
-        '❌ Please include a message to send to the user.'
-      );
-      return;
-    }
-
-    // Store admin response in thread
-    const redis = await getRedisClient();
-    const threadKey = `${SUPPORT_THREAD_KEY}${targetUserId}`;
-    
-    // Ensure we have valid strings for all fields to avoid TypeScript errors
-    const message: SupportMessage = {
-      userId: adminId,
-      messageText: responseMessage || '',  // Ensure string type with default empty string
-      timestamp: Date.now()
-    };
-
-    // Add to thread
-    const messageJson = JSON.stringify(message);
-    await redis.rPush(threadKey, messageJson);
-    
-    // Send response to user
-    try {
-      await bot.sendMessage(
-        targetUserId,
-        `🔹 *Support Response:*\n\n${responseMessage}\n\nReply with \`/support your reply\` to continue this conversation.`,
-        { parse_mode: 'Markdown' }
-      );
-      
-      // Confirm to admin
-      await bot.sendMessage(
-        chatId,
-        `✅ Message sent to user ${targetUserId}.`
-      );
-    } catch (error) {
-      console.error('Failed to send support response:', error);
-      await bot.sendMessage(
-        chatId,
-        `❌ Failed to send message to user ${targetUserId}. They may have blocked the bot.`
-      );
-    }
-  }
-
-  /**
-   * Show list of pending support requests to admin
-   */
-  private async showPendingSupportRequests(chatId: number): Promise<void> {
-    const redis = await getRedisClient();
-    const pendingUserIds = await redis.sMembers(SUPPORT_PENDING_KEY);
-
-    if (!pendingUserIds.length) {
-      await bot.sendMessage(
-        chatId,
-        '✅ No pending support requests.'
-      );
-      return;
-    }
-
-    let message = '🔸 *Pending Support Requests:*\n\n';
-    
-    for (const userIdStr of pendingUserIds) {
-      const userId = parseInt(userIdStr);
-      const threadKey = `${SUPPORT_THREAD_KEY}${userId}`;
-      
-      // Get latest message from thread
-      const threadLength = await redis.lLen(threadKey);
-      if (threadLength > 0) {
-        const latestMsg = await redis.lIndex(threadKey, -1);
-        if (latestMsg && typeof latestMsg === 'string') {
-          try {
-            const msgObj = JSON.parse(latestMsg) as SupportMessage;
-            const date = new Date(msgObj.timestamp).toLocaleString();
-            const userName = msgObj.userName || 'User';
-            // Handle possibly undefined messageText
-            const messageText = msgObj.messageText || '';
-            const previewText = messageText.length > 50 
-              ? messageText.substring(0, 50) + '...' 
-              : messageText;
-            
-            message += `👤 *${userName}* (ID: ${userId})\n`;
-            message += `📝 "${previewText}"\n`;
-            message += `🕒 ${date}\n`;
-            message += `Reply: \`/support ${userId} your response\`\n\n`;
-          } catch (e) {
-            message += `👤 User ${userId}\n`;
-            message += `Error parsing message data\n\n`;
-          }
+    async execute(msg: TelegramBot.Message, args?: string[]): Promise<void> {
+        const chatId = msg.chat.id;
+        const isUserAdmin = (process.env.ADMIN_IDS || '').split(',').map(id => parseInt(id.trim())).includes(chatId);
+        
+        // No arguments provided
+        if (!args || args.length === 0) {
+            if (isUserAdmin) {
+                await this.showSupportDashboard(chatId);
+                return;
+            } else {
+                await bot.sendMessage(chatId, 'Please provide a message to send to support.\n\nExample: `/support I need help with...`', { parse_mode: 'Markdown' });
+                return;
+            }
         }
-      } else {
-        message += `👤 User ${userId}\n`;
-        message += `No message content available\n\n`;
-      }
-    }
-
-    message += 'To respond to a user, use:\n`/support <userId> <your message>`';
-    
-    await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-  }
-
-  /**
-   * Notify all admins about a new support request
-   */
-  private async notifyAdmins(userId: number, userName: string, messageContent: string | undefined): Promise<void> {
-    // Get admin IDs from environment variable
-    const adminIdsEnv = process.env.ADMIN_IDS || '';
-    const adminIds = adminIdsEnv.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
-    
-    if (!adminIds.length) {
-      console.warn('No admin IDs configured for support notifications');
-      return;
+        
+        try {
+            if (isUserAdmin) {
+                // Admin is responding to a user
+                await this.handleAdminResponse(chatId, args);
+            } else {
+                // User is sending a message to support
+                await this.handleUserMessage(chatId, args);
+            }
+        } catch (error) {
+            if (error instanceof Error) {
+                await ErrorHandler.handleError(error, ErrorType.COMMAND_HANDLER, {
+                    commandName: 'support',
+                    userId: chatId,
+                    message: msg.text || ''
+                });
+            }
+            
+            await bot.sendMessage(chatId, '\u274c Error processing your support request. Please try again later.');
+        }
     }
     
-    // Handle potentially undefined messageContent
-    const safeMessageContent = messageContent || '(No message provided)';
-    
-    const notification = 
-      `🔔 *New Support Request*\n\n` +
-      `From: ${userName} (ID: ${userId})\n` +
-      `Message: ${safeMessageContent}\n\n` +
-      `Reply with: \`/support ${userId} your response\``;
-    
-    for (const adminId of adminIds) {
-      try {
-        await bot.sendMessage(adminId, notification, { parse_mode: 'Markdown' });
-      } catch (error) {
-        console.error(`Failed to notify admin ${adminId}:`, error);
-      }
+    /**
+     * Show support dashboard to admin
+     */
+    private async showSupportDashboard(adminId: number): Promise<void> {
+        const recentMessages = await getSupportMessages(10);
+        
+        if (recentMessages.length === 0) {
+            await bot.sendMessage(adminId, '\ud83d\udcac *Support Dashboard* \ud83d\udcac\n\nThere are no recent support messages.');
+            return;
+        }
+        
+        let message = '\ud83d\udcac *Support Dashboard* \ud83d\udcac\n\n';
+        message += '*Recent Support Messages:*\n\n';
+        
+        for (const msg of recentMessages) {
+            const direction = msg.isResponse ? '\u2b07\ufe0f REPLY' : '\u2b06\ufe0f REQUEST';
+            message += `${direction} | ${new Date(msg.timestamp).toLocaleString()}\n`;
+            message += `From: ${msg.isResponse ? 'Admin' : `User ${msg.userId}`}\n`;
+            message += `Message: ${msg.message}\n\n`;
+            
+            if (!msg.isResponse) {
+                message += `To reply: \`/support ${msg.userId} Your response here\`\n`;
+            }
+            
+            message += '-------------------\n\n';
+        }
+        
+        await bot.sendMessage(adminId, message, { parse_mode: 'Markdown' });
     }
-  }
+    
+    /**
+     * Handle admin response to a user
+     */
+    private async handleAdminResponse(adminId: number, args: string[]): Promise<void> {
+        // Format should be: /support USER_ID message
+        const userId = parseInt(args[0] || '0');
+        
+        if (isNaN(userId)) {
+            await bot.sendMessage(adminId, 'Invalid user ID. Please use the format: `/support USER_ID Your message here`', { parse_mode: 'Markdown' });
+            return;
+        }
+        
+        const responseMessage = args.slice(1).join(' ');
+        
+        if (!responseMessage) {
+            await bot.sendMessage(adminId, 'Please provide a message to send to the user.', { parse_mode: 'Markdown' });
+            return;
+        }
+        
+        // Create and save response message
+        const supportMessage: SupportMessage = {
+            id: `support_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
+            userId: userId,
+            adminId: adminId,
+            message: responseMessage,
+            timestamp: Date.now(),
+            isResponse: true
+        };
+        
+        await saveSupportMessage(supportMessage);
+        
+        // Send message to user
+        await bot.sendMessage(
+            userId,
+            `\ud83d\udcac *Support Response* \ud83d\udcac\n\n${responseMessage}\n\nReply with \`/support Your message\` to continue this conversation.`,
+            { parse_mode: 'Markdown' }
+        );
+        
+        // Confirm to admin
+        await bot.sendMessage(
+            adminId,
+            `\u2705 Your response has been sent to user ${userId}.`,
+            { parse_mode: 'Markdown' }
+        );
+    }
+    
+    /**
+     * Handle user support message
+     */
+    private async handleUserMessage(userId: number, args: string[]): Promise<void> {
+        const userMessage = args.join(' ');
+        
+        // Create and save user message
+        const supportMessage: SupportMessage = {
+            id: `support_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
+            userId: userId,
+            message: userMessage,
+            timestamp: Date.now(),
+            isResponse: false
+        };
+        
+        await saveSupportMessage(supportMessage);
+        
+        // Send confirmation to user
+        await bot.sendMessage(
+            userId,
+            '\u2705 Your message has been sent to our support team. We will respond as soon as possible.',
+            { parse_mode: 'Markdown' }
+        );
+        
+        // Notify all admins
+        const adminIds = (process.env.ADMIN_IDS || '').split(',').map(id => parseInt(id.trim()));
+        
+        for (const adminId of adminIds) {
+            if (adminId && !isNaN(adminId)) {
+                await bot.sendMessage(
+                    adminId,
+                    `\ud83d\udd14 *New Support Request* \ud83d\udd14\n\n` +
+                    `From User: ${userId}\n` +
+                    `Message: ${userMessage}\n\n` +
+                    `To respond: \`/support ${userId} Your response here\``,
+                    { parse_mode: 'Markdown' }
+                );
+            }
+        }
+    }
 }

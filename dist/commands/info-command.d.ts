@@ -1,9 +1,9 @@
-import { BaseCommand } from './base-command';
 import TelegramBot from 'node-telegram-bot-api';
+import { BaseCommand } from './base-command';
 /**
- * Command to provide help and feature recommendations to users
+ * Command to display bot information and help
  */
 export declare class InfoCommand extends BaseCommand {
     constructor();
-    protected executeCommand(msg: TelegramBot.Message): Promise<void>;
+    execute(msg: TelegramBot.Message, _args?: string[]): Promise<void>;
 }

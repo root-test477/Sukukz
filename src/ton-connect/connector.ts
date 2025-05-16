@@ -13,6 +13,60 @@ type StoredConnectorData = {
 const connectors = new Map<number, StoredConnectorData>();
 
 /**
+ * Interface for connected wallet information
+ */
+export interface ConnectedWallet {
+    address: string;
+    walletName: string;
+    connectedAt: number;
+    lastActive: number;
+}
+
+/**
+ * Get connected wallet for a user
+ */
+export async function getConnectedWallet(userId: number): Promise<ConnectedWallet | null> {
+    try {
+        // In a real implementation, this would fetch from Redis or other database
+        // For this demo we'll simulate a connected wallet for some users
+        const storage = new TonConnectStorage(userId);
+        const walletData = await storage.getItem('connected_wallet');
+        
+        if (!walletData) {
+            return null;
+        }
+        
+        return JSON.parse(walletData) as ConnectedWallet;
+    } catch (error) {
+        console.error(`Error getting connected wallet for user ${userId}:`, error);
+        return null;
+    }
+}
+
+/**
+ * Disconnect wallet for a user
+ */
+export async function disconnectWallet(userId: number): Promise<boolean> {
+    try {
+        // In a real implementation, this would update in Redis or other database
+        const storage = new TonConnectStorage(userId);
+        await storage.removeItem('connected_wallet');
+        
+        // Also clean up any connector instances
+        if (connectors.has(userId)) {
+            const { timeout } = connectors.get(userId)!;
+            clearTimeout(timeout);
+            connectors.delete(userId);
+        }
+        
+        return true;
+    } catch (error) {
+        console.error(`Error disconnecting wallet for user ${userId}:`, error);
+        return false;
+    }
+}
+
+/**
  * Retry function for handling network operations that might fail
  */
 async function withRetry<T>(operation: () => Promise<T>, retries = 3, delay = 2000): Promise<T> {

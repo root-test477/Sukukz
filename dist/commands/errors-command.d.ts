@@ -5,5 +5,5 @@ import { AdminCommand } from './base-command';
  */
 export declare class ErrorsCommand extends AdminCommand {
     constructor();
-    executeAdmin(msg: TelegramBot.Message): Promise<void>;
+    executeAdmin(msg: TelegramBot.Message, _args?: string[]): Promise<void>;
 }

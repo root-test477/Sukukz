@@ -5,6 +5,12 @@ import { getRedisClient, saveErrorReport } from './ton-connect/storage';
 
 // Error type enum for categorizing errors
 export enum ErrorType {
+    GENERAL = 'general',
+    COMMAND_HANDLER = 'command_handler',
+    WALLET_CONNECTION = 'wallet_connection',
+    REDIS_STORAGE = 'redis_storage',
+    TRANSACTION = 'transaction',
+    API_INTEGRATION = 'api_integration',
     COMMAND_ERROR = 'command_error',
     CONNECTION_ERROR = 'connection_error',
     STORAGE_ERROR = 'storage_error',
@@ -12,10 +18,35 @@ export enum ErrorType {
     UNKNOWN_ERROR = 'unknown_error'
 }
 
-// Error handler interface that other components can implement
-export interface ErrorHandler {
-    handleError(error: Error, context?: any): Promise<void>;
-    logError(error: Error, context?: any): void;
+/**
+ * Error handler class with static methods
+ */
+export class ErrorHandler {
+    /**
+     * Handle an error with the specified error type
+     */
+    static async handleError(error: Error, errorType: ErrorType = ErrorType.GENERAL, context?: any): Promise<string> {
+        // Generate a unique error ID
+        const errorId = generateErrorId();
+        
+        // Log the error
+        this.logError(error, errorType, context);
+        
+        // Save error report to Redis
+        await saveErrorReport(errorId, error, errorType, context);
+        
+        return errorId;
+    }
+
+    /**
+     * Log an error to the console
+     */
+    static logError(error: Error, errorType: ErrorType = ErrorType.GENERAL, context?: any): void {
+        console.error(`[${errorType}] Error:`, error);
+        if (context) {
+            console.error('Context:', context);
+        }
+    }
 }
 
 interface ErrorReport {
@@ -44,20 +75,13 @@ export function withErrorHandling(
             const errorId = generateErrorId();
             console.error(`Error in ${commandName} [ErrorID: ${errorId}]:`, error);
             
-            // Create error report
-            const errorReport: ErrorReport = {
-                id: errorId,
-                timestamp: new Date().toISOString(),
-                commandName,
-                userId: chatId,
-                userMessage: msg.text || '',
-                error: error.message || 'Unknown error',
-                stack: error.stack
-            };
-            
-            // Save error report
+            // Save error using ErrorHandler
             try {
-                await saveErrorReport(errorReport);
+                await ErrorHandler.handleError(error, ErrorType.COMMAND_HANDLER, {
+                    commandName,
+                    userId: chatId,
+                    message: msg.text || ''
+                });
             } catch (storageError) {
                 console.error('Failed to save error report:', storageError);
             }

@@ -19,7 +19,7 @@ class ErrorsCommand extends base_command_1.AdminCommand {
     constructor() {
         super('errors', 'View recent error reports');
     }
-    executeAdmin(msg) {
+    executeAdmin(msg, _args) {
         return __awaiter(this, void 0, void 0, function* () {
             // Delegate to the handler in error-handler.ts
             yield (0, error_handler_1.handleErrorsCommand)(msg);

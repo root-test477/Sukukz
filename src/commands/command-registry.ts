@@ -7,6 +7,20 @@ import { Command } from './base-command';
  * Centralizes command registration and execution
  */
 export class CommandRegistry {
+    private static instance: CommandRegistry;
+    
+    /**
+     * Get the singleton instance of CommandRegistry
+     */
+    public static getInstance(): CommandRegistry {
+        if (!CommandRegistry.instance) {
+            CommandRegistry.instance = new CommandRegistry();
+        }
+        return CommandRegistry.instance;
+    }
+    
+    // Private constructor to enforce singleton pattern
+    private constructor() {}
     private commands: Map<string, Command> = new Map();
     private commandCallbacks: Map<string, (msg: TelegramBot.Message, match?: RegExpMatchArray | null) => Promise<void>> = new Map();
     

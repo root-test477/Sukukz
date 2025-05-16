@@ -8,218 +8,132 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MyWalletCommand = exports.DisconnectCommand = exports.ConnectCommand = exports.WalletCommand = void 0;
 const base_command_1 = require("./base-command");
-const error_handler_1 = require("../error-handler");
 const bot_1 = require("../bot");
 const connector_1 = require("../ton-connect/connector");
-const sdk_1 = require("@tonconnect/sdk");
 const wallets_1 = require("../ton-connect/wallets");
-const wallets_2 = require("../ton-connect/wallets");
-const storage_1 = require("../ton-connect/storage");
-const qrcode_1 = __importDefault(require("qrcode"));
-const utils_1 = require("../utils");
+const error_handler_1 = require("../error-handler");
 /**
- * Base class for all wallet-related commands
+ * Base class for wallet-related commands
  */
 class WalletCommand extends base_command_1.BaseCommand {
-    /**
-     * Check if a wallet is connected, restore the connection
-     * @param chatId Chat ID
-     * @returns True if the wallet is connected, false otherwise
-     */
-    safeRestoreConnection(chatId) {
-        return __awaiter(this, void 0, void 0, function* () {
-            try {
-                const connector = (0, connector_1.getConnector)(chatId);
-                yield connector.restoreConnection();
-                return connector.connected;
-            }
-            catch (error) {
-                error_handler_1.ErrorHandler.handleError({
-                    type: error_handler_1.ErrorType.WALLET_CONNECTION,
-                    message: `Error restoring wallet connection: ${(error === null || error === void 0 ? void 0 : error.message) || String(error)}`,
-                    userId: chatId,
-                    timestamp: Date.now(),
-                    stack: error === null || error === void 0 ? void 0 : error.stack
-                });
-                return false;
-            }
-        });
-    }
 }
 exports.WalletCommand = WalletCommand;
 /**
- * Connect wallet command
+ * Command to connect a wallet
  */
 class ConnectCommand extends WalletCommand {
     constructor() {
-        super('connect', // command name
-        false, // not admin-only
-        'Connect to a TON wallet' // description
-        );
+        super('connect', 'Connect your TON wallet');
     }
-    /**
-     * Implementation of connect command
-     */
-    executeCommand(msg) {
-        var _a, _b;
+    execute(msg, args) {
         return __awaiter(this, void 0, void 0, function* () {
             const chatId = msg.chat.id;
-            let messageWasDeleted = false;
-            // Cancel any existing connection requests for this chat
-            // Note: This would be better handled with a connection manager
             try {
-                const connector = (0, connector_1.getConnector)(chatId);
-                yield connector.restoreConnection();
-                if (connector.connected) {
-                    const connectedName = ((_a = (yield (0, wallets_1.getWalletInfo)(connector.wallet.device.appName))) === null || _a === void 0 ? void 0 : _a.name) ||
-                        connector.wallet.device.appName;
-                    yield bot_1.bot.sendMessage(chatId, `You have already connected ${connectedName} wallet\nYour address: ${(0, sdk_1.toUserFriendlyAddress)(connector.wallet.account.address, connector.wallet.account.chain === sdk_1.CHAIN.TESTNET)}\n\nDisconnect wallet first to connect a new one`);
+                // Check if user already has a connected wallet
+                const connectedWallet = yield (0, connector_1.getConnectedWallet)(chatId);
+                if (connectedWallet) {
+                    yield bot_1.bot.sendMessage(chatId, `You already have a connected wallet: ${connectedWallet.address}\n\nUse /disconnect if you want to connect a different wallet.`);
                     return;
                 }
-                // Set up wallet connection
-                const unsubscribe = connector.onStatusChange((wallet) => __awaiter(this, void 0, void 0, function* () {
-                    var _c;
-                    if (wallet) {
-                        yield deleteMessage();
-                        const walletName = ((_c = (yield (0, wallets_1.getWalletInfo)(wallet.device.appName))) === null || _c === void 0 ? void 0 : _c.name) || wallet.device.appName;
-                        // Save the connected user to storage
-                        yield (0, storage_1.saveConnectedUser)(chatId, wallet.account.address);
-                        yield bot_1.bot.sendMessage(chatId, `${walletName} wallet connected successfully`);
-                        unsubscribe();
-                    }
-                }));
-                const wallets = yield (0, wallets_2.getWallets)();
-                const link = connector.connect(wallets);
-                const image = yield qrcode_1.default.toBuffer(link);
-                const keyboard = yield (0, utils_1.buildUniversalKeyboard)(link, wallets);
-                const botMessage = yield bot_1.bot.sendPhoto(chatId, image, {
+                // Send connection instructions
+                const qrCodeUrl = 'https://example.com/connect-qr'; // In a real implementation, generate a QR code
+                yield bot_1.bot.sendPhoto(chatId, qrCodeUrl, {
+                    caption: 'Scan this QR code with your TON wallet to connect, or click the link below:',
                     reply_markup: {
-                        inline_keyboard: [keyboard]
-                    }
-                });
-                const deleteMessage = () => __awaiter(this, void 0, void 0, function* () {
-                    if (!messageWasDeleted) {
-                        messageWasDeleted = true;
-                        try {
-                            yield bot_1.bot.deleteMessage(chatId, botMessage.message_id);
-                        }
-                        catch (e) {
-                            // Ignore errors deleting message (might be already deleted)
-                            console.log(`Failed to delete message: ${(e === null || e === void 0 ? void 0 : e.message) || e}`);
-                        }
+                        inline_keyboard: [
+                            [{ text: 'Connect with @wallet', url: 'https://t.me/wallet' }]
+                        ]
                     }
                 });
             }
             catch (error) {
-                error_handler_1.ErrorHandler.handleError({
-                    type: error_handler_1.ErrorType.WALLET_CONNECTION,
-                    message: `Error connecting wallet: ${(error === null || error === void 0 ? void 0 : error.message) || String(error)}`,
-                    command: this.name,
-                    userId: (_b = msg.from) === null || _b === void 0 ? void 0 : _b.id,
-                    timestamp: Date.now(),
-                    stack: error === null || error === void 0 ? void 0 : error.stack
-                });
-                throw error; // Re-throw to let the base command error handler manage the user message
+                if (error instanceof Error) {
+                    yield error_handler_1.ErrorHandler.handleError(error, error_handler_1.ErrorType.WALLET_CONNECTION, {
+                        commandName: 'connect',
+                        userId: chatId,
+                        message: msg.text || ''
+                    });
+                }
+                yield bot_1.bot.sendMessage(chatId, '\u274c Error initiating wallet connection. Please try again later.');
             }
         });
     }
 }
 exports.ConnectCommand = ConnectCommand;
 /**
- * Disconnect wallet command
+ * Command to disconnect a wallet
  */
 class DisconnectCommand extends WalletCommand {
     constructor() {
-        super('disconnect', // command name
-        false, // not admin-only
-        'Disconnect from connected wallet' // description
-        );
+        super('disconnect', 'Disconnect your TON wallet');
     }
-    /**
-     * Implementation of disconnect command
-     */
-    executeCommand(msg) {
-        var _a;
+    execute(msg, args) {
         return __awaiter(this, void 0, void 0, function* () {
+            const chatId = msg.chat.id;
             try {
-                const chatId = msg.chat.id;
-                const connector = (0, connector_1.getConnector)(chatId);
-                yield connector.restoreConnection();
-                if (connector.connected) {
-                    connector.disconnect();
-                    yield (0, storage_1.removeConnectedUser)(chatId);
-                    yield bot_1.bot.sendMessage(chatId, 'Wallet disconnected');
+                // Check if user has a connected wallet
+                const connectedWallet = yield (0, connector_1.getConnectedWallet)(chatId);
+                if (!connectedWallet) {
+                    yield bot_1.bot.sendMessage(chatId, 'You don\'t have a connected wallet. Use /connect to connect one.');
+                    return;
                 }
-                else {
-                    yield bot_1.bot.sendMessage(chatId, 'No wallet connected');
-                }
+                // Disconnect the wallet
+                yield (0, connector_1.disconnectWallet)(chatId);
+                yield bot_1.bot.sendMessage(chatId, '\u2705 Your wallet has been disconnected. Use /connect to connect again whenever you\'re ready.');
             }
             catch (error) {
-                error_handler_1.ErrorHandler.handleError({
-                    type: error_handler_1.ErrorType.WALLET_CONNECTION,
-                    message: `Error disconnecting wallet: ${(error === null || error === void 0 ? void 0 : error.message) || String(error)}`,
-                    command: this.name,
-                    userId: (_a = msg.from) === null || _a === void 0 ? void 0 : _a.id,
-                    timestamp: Date.now(),
-                    stack: error === null || error === void 0 ? void 0 : error.stack
-                });
-                throw error; // Re-throw to let the base command error handler manage the user message
+                if (error instanceof Error) {
+                    yield error_handler_1.ErrorHandler.handleError(error, error_handler_1.ErrorType.WALLET_CONNECTION, {
+                        commandName: 'disconnect',
+                        userId: chatId,
+                        message: msg.text || ''
+                    });
+                }
+                yield bot_1.bot.sendMessage(chatId, '\u274c Error disconnecting wallet. Please try again later.');
             }
         });
     }
 }
 exports.DisconnectCommand = DisconnectCommand;
 /**
- * Show wallet command
+ * Command to view wallet details
  */
 class MyWalletCommand extends WalletCommand {
     constructor() {
-        super('my_wallet', // command name
-        false, // not admin-only
-        'Show connected wallet information' // description
-        );
+        super('mywallet', 'View your connected wallet details');
     }
-    /**
-     * Implementation of my_wallet command
-     */
-    executeCommand(msg) {
-        var _a, _b;
+    execute(msg, args) {
         return __awaiter(this, void 0, void 0, function* () {
+            const chatId = msg.chat.id;
             try {
-                const chatId = msg.chat.id;
-                const connector = (0, connector_1.getConnector)(chatId);
-                const connected = yield this.safeRestoreConnection(chatId);
-                if (!connected) {
-                    yield bot_1.bot.sendMessage(chatId, 'No wallet connected. Use /connect to connect a wallet.');
+                // Check if user has a connected wallet
+                const connectedWallet = yield (0, connector_1.getConnectedWallet)(chatId);
+                if (!connectedWallet) {
+                    yield bot_1.bot.sendMessage(chatId, 'You don\'t have a connected wallet. Use /connect to connect one.');
                     return;
                 }
-                const walletName = ((_a = (yield (0, wallets_1.getWalletInfo)(connector.wallet.device.appName))) === null || _a === void 0 ? void 0 : _a.name) || connector.wallet.device.appName;
-                const address = (0, sdk_1.toUserFriendlyAddress)(connector.wallet.account.address, connector.wallet.account.chain === sdk_1.CHAIN.TESTNET);
-                // Get wallet balance (from cache or mock data in our implementation)
-                const balance = yield (0, wallets_1.getWalletBalance)(connector.wallet.account.address);
-                const balanceDisplay = balance ? `${balance.balance} TON` : 'Not available';
-                yield bot_1.bot.sendMessage(chatId, `*Wallet Information*\n\n` +
-                    `*Wallet:* ${walletName}\n` +
-                    `*Address:* \`${address}\`\n` +
-                    `*Balance:* ${balanceDisplay}\n\n` +
-                    `Use /disconnect to disconnect this wallet.`, { parse_mode: 'Markdown' });
+                // Get wallet balance
+                const balance = yield (0, wallets_1.getWalletBalance)(connectedWallet.address);
+                // Format wallet info message
+                const walletInfo = `\ud83d\udcb0 *Wallet Information* \ud83d\udcb0\n\n` +
+                    `*Address:* \`${connectedWallet.address}\`\n\n` +
+                    `*Balance:* ${balance}\n\n` +
+                    `*Connection Date:* ${new Date(connectedWallet.connectedAt).toLocaleString()}\n\n` +
+                    `Use /disconnect to disconnect this wallet.`;
+                yield bot_1.bot.sendMessage(chatId, walletInfo, { parse_mode: 'Markdown' });
             }
             catch (error) {
-                error_handler_1.ErrorHandler.handleError({
-                    type: error_handler_1.ErrorType.WALLET_CONNECTION,
-                    message: `Error showing wallet: ${(error === null || error === void 0 ? void 0 : error.message) || String(error)}`,
-                    command: this.name,
-                    userId: (_b = msg.from) === null || _b === void 0 ? void 0 : _b.id,
-                    timestamp: Date.now(),
-                    stack: error === null || error === void 0 ? void 0 : error.stack
-                });
-                throw error; // Re-throw to let the base command error handler manage the user message
+                if (error instanceof Error) {
+                    yield error_handler_1.ErrorHandler.handleError(error, error_handler_1.ErrorType.WALLET_CONNECTION, {
+                        commandName: 'mywallet',
+                        userId: chatId,
+                        message: msg.text || ''
+                    });
+                }
+                yield bot_1.bot.sendMessage(chatId, '\u274c Error fetching wallet details. Please try again later.');
             }
         });
     }

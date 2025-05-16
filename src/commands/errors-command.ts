@@ -10,7 +10,7 @@ export class ErrorsCommand extends AdminCommand {
         super('errors', 'View recent error reports');
     }
     
-    async executeAdmin(msg: TelegramBot.Message): Promise<void> {
+    async executeAdmin(msg: TelegramBot.Message, _args?: string[]): Promise<void> {
         // Delegate to the handler in error-handler.ts
         await handleErrorsCommand(msg);
     }

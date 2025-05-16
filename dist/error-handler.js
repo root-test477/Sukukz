@@ -9,18 +9,53 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.handleErrorsCommand = exports.setupGlobalErrorHandlers = exports.withErrorHandling = exports.ErrorType = void 0;
+exports.handleErrorsCommand = exports.setupGlobalErrorHandlers = exports.withErrorHandling = exports.ErrorHandler = exports.ErrorType = void 0;
 const bot_1 = require("./bot");
 const storage_1 = require("./ton-connect/storage");
 // Error type enum for categorizing errors
 var ErrorType;
 (function (ErrorType) {
+    ErrorType["GENERAL"] = "general";
+    ErrorType["COMMAND_HANDLER"] = "command_handler";
+    ErrorType["WALLET_CONNECTION"] = "wallet_connection";
+    ErrorType["REDIS_STORAGE"] = "redis_storage";
+    ErrorType["TRANSACTION"] = "transaction";
+    ErrorType["API_INTEGRATION"] = "api_integration";
     ErrorType["COMMAND_ERROR"] = "command_error";
     ErrorType["CONNECTION_ERROR"] = "connection_error";
     ErrorType["STORAGE_ERROR"] = "storage_error";
     ErrorType["VALIDATION_ERROR"] = "validation_error";
     ErrorType["UNKNOWN_ERROR"] = "unknown_error";
 })(ErrorType = exports.ErrorType || (exports.ErrorType = {}));
+/**
+ * Error handler class with static methods
+ */
+class ErrorHandler {
+    /**
+     * Handle an error with the specified error type
+     */
+    static handleError(error, errorType = ErrorType.GENERAL, context) {
+        return __awaiter(this, void 0, void 0, function* () {
+            // Generate a unique error ID
+            const errorId = generateErrorId();
+            // Log the error
+            this.logError(error, errorType, context);
+            // Save error report to Redis
+            yield (0, storage_1.saveErrorReport)(errorId, error, errorType, context);
+            return errorId;
+        });
+    }
+    /**
+     * Log an error to the console
+     */
+    static logError(error, errorType = ErrorType.GENERAL, context) {
+        console.error(`[${errorType}] Error:`, error);
+        if (context) {
+            console.error('Context:', context);
+        }
+    }
+}
+exports.ErrorHandler = ErrorHandler;
 /**
  * Global error handler for command execution
  * Wraps command handlers to prevent crashes and log errors
@@ -34,19 +69,13 @@ function withErrorHandling(handler, commandName) {
             const chatId = msg.chat.id;
             const errorId = generateErrorId();
             console.error(`Error in ${commandName} [ErrorID: ${errorId}]:`, error);
-            // Create error report
-            const errorReport = {
-                id: errorId,
-                timestamp: new Date().toISOString(),
-                commandName,
-                userId: chatId,
-                userMessage: msg.text || '',
-                error: error.message || 'Unknown error',
-                stack: error.stack
-            };
-            // Save error report
+            // Save error using ErrorHandler
             try {
-                yield (0, storage_1.saveErrorReport)(errorReport);
+                yield ErrorHandler.handleError(error, ErrorType.COMMAND_HANDLER, {
+                    commandName,
+                    userId: chatId,
+                    message: msg.text || ''
+                });
             }
             catch (storageError) {
                 console.error('Failed to save error report:', storageError);

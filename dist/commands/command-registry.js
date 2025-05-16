@@ -16,6 +16,16 @@ const bot_1 = require("../bot");
  * Centralizes command registration and execution
  */
 class CommandRegistry {
+    /**
+     * Get the singleton instance of CommandRegistry
+     */
+    static getInstance() {
+        if (!CommandRegistry.instance) {
+            CommandRegistry.instance = new CommandRegistry();
+        }
+        return CommandRegistry.instance;
+    }
+    // Private constructor to enforce singleton pattern
     constructor() {
         this.commands = new Map();
         this.commandCallbacks = new Map();

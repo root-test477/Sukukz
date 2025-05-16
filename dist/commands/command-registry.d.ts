@@ -4,6 +4,12 @@ import { Command } from './base-command';
  * Centralizes command registration and execution
  */
 export declare class CommandRegistry {
+    private static instance;
+    /**
+     * Get the singleton instance of CommandRegistry
+     */
+    static getInstance(): CommandRegistry;
+    private constructor();
     private commands;
     private commandCallbacks;
     /**

@@ -9,9 +9,11 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.handleSkipCommand = exports.handleTutorialCommand = exports.handleTutorialCallback = exports.startTutorial = void 0;
+exports.handleSkipCommand = exports.handleTutorialCommand = exports.skipTutorial = exports.handleTutorialCallback = exports.startTutorial = exports.getTutorialState = void 0;
 const bot_1 = require("./bot");
 const storage_1 = require("./ton-connect/storage");
+var storage_2 = require("./ton-connect/storage");
+Object.defineProperty(exports, "getTutorialState", { enumerable: true, get: function () { return storage_2.getTutorialState; } });
 const error_handler_1 = require("./error-handler");
 // Define tutorial steps
 const TUTORIAL_STEPS = [
@@ -205,6 +207,24 @@ function handleTutorialCallback(query, method) {
     });
 }
 exports.handleTutorialCallback = handleTutorialCallback;
+/**
+ * Skip the tutorial for a user
+ */
+function skipTutorial(chatId) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const state = yield (0, storage_1.getTutorialState)(chatId);
+        if (state && !state.completed) {
+            state.skipped = true;
+            state.lastUpdatedAt = Date.now();
+            yield (0, storage_1.saveTutorialState)(state);
+            yield bot_1.bot.sendMessage(chatId, 'Tutorial skipped. You can restart it anytime with /tutorial.');
+        }
+        else {
+            yield bot_1.bot.sendMessage(chatId, 'There is no active tutorial to skip. Use /tutorial to start one.');
+        }
+    });
+}
+exports.skipTutorial = skipTutorial;
 /**
  * Mark tutorial as completed
  */

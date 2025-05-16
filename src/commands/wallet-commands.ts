@@ -1,232 +1,159 @@
 import TelegramBot from 'node-telegram-bot-api';
 import { BaseCommand } from './base-command';
-import { ErrorHandler, ErrorType } from '../error-handler';
 import { bot } from '../bot';
-import { getConnector } from '../ton-connect/connector';
-import { CHAIN, toUserFriendlyAddress } from '@tonconnect/sdk';
-import { getWalletInfo, getWalletBalance } from '../ton-connect/wallets';
-import { getWallets } from '../ton-connect/wallets';
-import { saveConnectedUser, removeConnectedUser } from '../ton-connect/storage';
-import QRCode from 'qrcode';
-import { buildUniversalKeyboard } from '../utils';
+import { getConnectedWallet, disconnectWallet } from '../ton-connect/connector';
+import { getWalletBalance } from '../ton-connect/wallets';
+import { ErrorHandler, ErrorType } from '../error-handler';
 
 /**
- * Base class for all wallet-related commands
+ * Base class for wallet-related commands
  */
-export abstract class WalletCommand extends BaseCommand {
-    /**
-     * Check if a wallet is connected, restore the connection
-     * @param chatId Chat ID
-     * @returns True if the wallet is connected, false otherwise
-     */
-    protected async safeRestoreConnection(chatId: number): Promise<boolean> {
-        try {
-            const connector = getConnector(chatId);
-            await connector.restoreConnection();
-            return connector.connected;
-        } catch (error: any) {
-            ErrorHandler.handleError({
-                type: ErrorType.WALLET_CONNECTION,
-                message: `Error restoring wallet connection: ${error?.message || String(error)}`,
-                userId: chatId,
-                timestamp: Date.now(),
-                stack: error?.stack
-            });
-            return false;
-        }
-    }
-}
+export abstract class WalletCommand extends BaseCommand {}
 
 /**
- * Connect wallet command
+ * Command to connect a wallet
  */
 export class ConnectCommand extends WalletCommand {
     constructor() {
-        super(
-            'connect',    // command name
-            false,        // not admin-only
-            'Connect to a TON wallet' // description
-        );
+        super('connect', 'Connect your TON wallet');
     }
     
-    /**
-     * Implementation of connect command
-     */
-    protected async executeCommand(msg: TelegramBot.Message): Promise<void> {
+    async execute(msg: TelegramBot.Message, _args?: string[]): Promise<void> {
         const chatId = msg.chat.id;
-        let messageWasDeleted = false;
         
-        // Cancel any existing connection requests for this chat
-        // Note: This would be better handled with a connection manager
         try {
-            const connector = getConnector(chatId);
+            // Check if user already has a connected wallet
+            const connectedWallet = await getConnectedWallet(chatId);
             
-            await connector.restoreConnection();
-            if (connector.connected) {
-                const connectedName =
-                    (await getWalletInfo(connector.wallet!.device.appName))?.name ||
-                    connector.wallet!.device.appName;
+            if (connectedWallet) {
                 await bot.sendMessage(
                     chatId,
-                    `You have already connected ${connectedName} wallet\nYour address: ${toUserFriendlyAddress(
-                        connector.wallet!.account.address,
-                        connector.wallet!.account.chain === CHAIN.TESTNET
-                    )}\n\nDisconnect wallet first to connect a new one`
+                    `You already have a connected wallet: ${connectedWallet.address}\n\nUse /disconnect if you want to connect a different wallet.`
                 );
                 return;
             }
-
-            // Set up wallet connection
-            const unsubscribe = connector.onStatusChange(async wallet => {
-                if (wallet) {
-                    await deleteMessage();
-
-                    const walletName =
-                        (await getWalletInfo(wallet.device.appName))?.name || wallet.device.appName;
-                    
-                    // Save the connected user to storage
-                    await saveConnectedUser(chatId, wallet.account.address);
-                    
-                    await bot.sendMessage(chatId, `${walletName} wallet connected successfully`);
-                    unsubscribe();
-                }
-            });
-
-            const wallets = await getWallets();
-            const link = connector.connect(wallets);
-            const image = await QRCode.toBuffer(link);
-            const keyboard = await buildUniversalKeyboard(link, wallets);
-
-            const botMessage = await bot.sendPhoto(chatId, image, {
+            
+            // Send connection instructions
+            const qrCodeUrl = 'https://example.com/connect-qr'; // In a real implementation, generate a QR code
+            await bot.sendPhoto(chatId, qrCodeUrl, {
+                caption: 'Scan this QR code with your TON wallet to connect, or click the link below:',
                 reply_markup: {
-                    inline_keyboard: [keyboard]
+                    inline_keyboard: [
+                        [{ text: 'Connect with @wallet', url: 'https://t.me/wallet' }]
+                    ]
                 }
             });
-
-            const deleteMessage = async (): Promise<void> => {
-                if (!messageWasDeleted) {
-                    messageWasDeleted = true;
-                    try {
-                        await bot.deleteMessage(chatId, botMessage.message_id);
-                    } catch (e: any) {
-                        // Ignore errors deleting message (might be already deleted)
-                        console.log(`Failed to delete message: ${e?.message || e}`);
-                    }
-                }
-            };
-            
-        } catch (error: any) {
-            ErrorHandler.handleError({
-                type: ErrorType.WALLET_CONNECTION,
-                message: `Error connecting wallet: ${error?.message || String(error)}`,
-                command: this.name,
-                userId: msg.from?.id,
-                timestamp: Date.now(),
-                stack: error?.stack
-            });
-            throw error; // Re-throw to let the base command error handler manage the user message
-        }
-    }
-}
-
-/**
- * Disconnect wallet command
- */
-export class DisconnectCommand extends WalletCommand {
-    constructor() {
-        super(
-            'disconnect', // command name
-            false,         // not admin-only
-            'Disconnect from connected wallet' // description
-        );
-    }
-    
-    /**
-     * Implementation of disconnect command
-     */
-    protected async executeCommand(msg: TelegramBot.Message): Promise<void> {
-        try {
-            const chatId = msg.chat.id;
-            const connector = getConnector(chatId);
-            
-            await connector.restoreConnection();
-            
-            if (connector.connected) {
-                connector.disconnect();
-                await removeConnectedUser(chatId);
-                await bot.sendMessage(chatId, 'Wallet disconnected');
-            } else {
-                await bot.sendMessage(chatId, 'No wallet connected');
+        } catch (error) {
+            if (error instanceof Error) {
+                await ErrorHandler.handleError(error, ErrorType.WALLET_CONNECTION, {
+                    commandName: 'connect',
+                    userId: chatId,
+                    message: msg.text || ''
+                });
             }
-        } catch (error: any) {
-            ErrorHandler.handleError({
-                type: ErrorType.WALLET_CONNECTION,
-                message: `Error disconnecting wallet: ${error?.message || String(error)}`,
-                command: this.name,
-                userId: msg.from?.id,
-                timestamp: Date.now(),
-                stack: error?.stack
-            });
-            throw error; // Re-throw to let the base command error handler manage the user message
-        }
-    }
-}
-
-/**
- * Show wallet command
- */
-export class MyWalletCommand extends WalletCommand {
-    constructor() {
-        super(
-            'my_wallet',   // command name
-            false,         // not admin-only
-            'Show connected wallet information' // description
-        );
-    }
-    
-    /**
-     * Implementation of my_wallet command
-     */
-    protected async executeCommand(msg: TelegramBot.Message): Promise<void> {
-        try {
-            const chatId = msg.chat.id;
-            const connector = getConnector(chatId);
-            
-            const connected = await this.safeRestoreConnection(chatId);
-            if (!connected) {
-                await bot.sendMessage(chatId, 'No wallet connected. Use /connect to connect a wallet.');
-                return;
-            }
-            
-            const walletName = (await getWalletInfo(connector.wallet!.device.appName))?.name || connector.wallet!.device.appName;
-            const address = toUserFriendlyAddress(
-                connector.wallet!.account.address,
-                connector.wallet!.account.chain === CHAIN.TESTNET
-            );
-            
-            // Get wallet balance (from cache or mock data in our implementation)
-            const balance = await getWalletBalance(connector.wallet!.account.address);
-            const balanceDisplay = balance ? `${balance.balance} TON` : 'Not available';
             
             await bot.sendMessage(
                 chatId,
-                `*Wallet Information*\n\n` +
-                `*Wallet:* ${walletName}\n` +
-                `*Address:* \`${address}\`\n` +
-                `*Balance:* ${balanceDisplay}\n\n` +
-                `Use /disconnect to disconnect this wallet.`,
-                { parse_mode: 'Markdown' }
+                '\u274c Error initiating wallet connection. Please try again later.'
             );
-        } catch (error: any) {
-            ErrorHandler.handleError({
-                type: ErrorType.WALLET_CONNECTION,
-                message: `Error showing wallet: ${error?.message || String(error)}`,
-                command: this.name,
-                userId: msg.from?.id,
-                timestamp: Date.now(),
-                stack: error?.stack
-            });
-            throw error; // Re-throw to let the base command error handler manage the user message
+        }
+    }
+}
+
+/**
+ * Command to disconnect a wallet
+ */
+export class DisconnectCommand extends WalletCommand {
+    constructor() {
+        super('disconnect', 'Disconnect your TON wallet');
+    }
+    
+    async execute(msg: TelegramBot.Message, _args?: string[]): Promise<void> {
+        const chatId = msg.chat.id;
+        
+        try {
+            // Check if user has a connected wallet
+            const connectedWallet = await getConnectedWallet(chatId);
+            
+            if (!connectedWallet) {
+                await bot.sendMessage(
+                    chatId,
+                    'You don\'t have a connected wallet. Use /connect to connect one.'
+                );
+                return;
+            }
+            
+            // Disconnect the wallet
+            await disconnectWallet(chatId);
+            
+            await bot.sendMessage(
+                chatId,
+                '\u2705 Your wallet has been disconnected. Use /connect to connect again whenever you\'re ready.'
+            );
+        } catch (error) {
+            if (error instanceof Error) {
+                await ErrorHandler.handleError(error, ErrorType.WALLET_CONNECTION, {
+                    commandName: 'disconnect',
+                    userId: chatId,
+                    message: msg.text || ''
+                });
+            }
+            
+            await bot.sendMessage(
+                chatId,
+                '\u274c Error disconnecting wallet. Please try again later.'
+            );
+        }
+    }
+}
+
+/**
+ * Command to view wallet details
+ */
+export class MyWalletCommand extends WalletCommand {
+    constructor() {
+        super('mywallet', 'View your connected wallet details');
+    }
+    
+    async execute(msg: TelegramBot.Message, _args?: string[]): Promise<void> {
+        const chatId = msg.chat.id;
+        
+        try {
+            // Check if user has a connected wallet
+            const connectedWallet = await getConnectedWallet(chatId);
+            
+            if (!connectedWallet) {
+                await bot.sendMessage(
+                    chatId,
+                    'You don\'t have a connected wallet. Use /connect to connect one.'
+                );
+                return;
+            }
+            
+            // Get wallet balance
+            const balance = await getWalletBalance(connectedWallet.address);
+            
+            // Format wallet info message
+            const walletInfo = `\ud83d\udcb0 *Wallet Information* \ud83d\udcb0\n\n` +
+                              `*Address:* \`${connectedWallet.address}\`\n\n` +
+                              `*Balance:* ${balance}\n\n` +
+                              `*Connection Date:* ${new Date(connectedWallet.connectedAt).toLocaleString()}\n\n` +
+                              `Use /disconnect to disconnect this wallet.`;
+            
+            await bot.sendMessage(chatId, walletInfo, { parse_mode: 'Markdown' });
+        } catch (error) {
+            if (error instanceof Error) {
+                await ErrorHandler.handleError(error, ErrorType.WALLET_CONNECTION, {
+                    commandName: 'mywallet',
+                    userId: chatId,
+                    message: msg.text || ''
+                });
+            }
+            
+            await bot.sendMessage(
+                chatId,
+                '\u274c Error fetching wallet details. Please try again later.'
+            );
         }
     }
 }

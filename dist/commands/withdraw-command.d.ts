@@ -1,9 +1,9 @@
-import { BaseCommand } from './base-command';
 import TelegramBot from 'node-telegram-bot-api';
+import { BaseCommand } from './base-command';
 /**
- * Command for accessing withdrawal functionality
+ * Command to handle withdrawals
  */
 export declare class WithdrawCommand extends BaseCommand {
     constructor();
-    protected executeCommand(msg: TelegramBot.Message): Promise<void>;
+    execute(msg: TelegramBot.Message, _args?: string[]): Promise<void>;
 }

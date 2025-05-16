@@ -227,10 +227,13 @@ export interface TransactionSubmission {
     notes?: string;     // Optional notes from admin
 }
 
-export async function saveTransactionSubmission(chatId: number, transactionId: string): Promise<void> {
+export async function saveTransactionSubmission(chatId: number, transactionId: string, amount: string = '0', description: string = ''): Promise<void> {
     const submission: TransactionSubmission = {
         id: transactionId,
         userId: chatId,
+        txId: transactionId,
+        amount: amount,
+        description: description,
         timestamp: Date.now(),
         status: 'pending'
     };
@@ -268,11 +271,107 @@ export async function getTransactionSubmission(transactionId: string): Promise<T
     return data ? JSON.parse(data) : null;
 }
 
+/**
+ * TransactionSubmission interface for payment submissions
+ */
+export interface TransactionSubmission {
+    id: string;
+    userId: number;
+    txId: string;
+    amount: string;
+    description: string;
+    status: 'pending' | 'approved' | 'rejected';
+    timestamp: number;
+    reviewedBy?: number;
+    reviewedAt?: number;
+    reviewNote?: string;
+}
+
+/**
+ * Save a new transaction submission to Redis
+ */
+export async function saveTransaction(transaction: TransactionSubmission): Promise<void> {
+    await client.hSet(`transaction:${transaction.id}`, {
+        userId: transaction.userId.toString(),
+        txId: transaction.txId,
+        amount: transaction.amount,
+        description: transaction.description,
+        status: transaction.status,
+        timestamp: transaction.timestamp.toString()
+    });
+    
+    // Also add to user's transaction list
+    await client.sAdd(`user:${transaction.userId}:transactions`, transaction.id);
+    
+    // Add to global transaction list by status
+    await client.sAdd(`transactions:${transaction.status}`, transaction.id);
+}
+
+/**
+ * Get a transaction by ID
+ */
+export async function getTransaction(id: string): Promise<TransactionSubmission | null> {
+    const transactionData = await client.hGetAll(`transaction:${id}`);
+    
+    if (!transactionData || Object.keys(transactionData).length === 0) {
+        return null;
+    }
+    
+    return {
+        id,
+        userId: parseInt(transactionData.userId || '0'),
+        txId: transactionData.txId || id, // Use id as fallback if txId is undefined
+        amount: transactionData.amount || '0',
+        description: transactionData.description || '',
+        status: (transactionData.status || 'pending') as 'pending' | 'approved' | 'rejected',
+        timestamp: parseInt(transactionData.timestamp || '0'),
+        reviewedBy: transactionData.reviewedBy ? parseInt(transactionData.reviewedBy) : undefined,
+        reviewedAt: transactionData.reviewedAt ? parseInt(transactionData.reviewedAt) : undefined,
+        reviewNote: transactionData.reviewNote
+    };
+}
+
+/**
+ * Update an existing transaction
+ */
+export async function updateTransaction(transaction: TransactionSubmission): Promise<void> {
+    // First remove from status-specific list
+    const tx = await getTransaction(transaction.id);
+    if (tx && tx.status !== transaction.status) {
+        await client.sRem(`transactions:${tx.status}`, transaction.id);
+        await client.sAdd(`transactions:${transaction.status}`, transaction.id);
+    }
+    
+    // Update the transaction data
+    await client.hSet(`transaction:${transaction.id}`, {
+        userId: transaction.userId.toString(),
+        txId: transaction.txId,
+        amount: transaction.amount,
+        description: transaction.description,
+        status: transaction.status,
+        timestamp: transaction.timestamp.toString(),
+        ...(transaction.reviewedBy && { reviewedBy: transaction.reviewedBy.toString() }),
+        ...(transaction.reviewedAt && { reviewedAt: transaction.reviewedAt.toString() }),
+        ...(transaction.reviewNote && { reviewNote: transaction.reviewNote })
+    });
+}
+
+/**
+ * Get all pending transactions
+ */
 export async function getAllPendingTransactions(): Promise<TransactionSubmission[]> {
-    const transactions = await client.hGetAll('transaction_submissions');
-    return Object.values(transactions)
-        .map(data => JSON.parse(data))
-        .filter((submission: TransactionSubmission) => submission.status === 'pending');
+    const pendingIds = await client.sMembers('transactions:pending');
+    const transactions: TransactionSubmission[] = [];
+    
+    for (const id of pendingIds) {
+        const tx = await getTransaction(id);
+        if (tx) {
+            transactions.push(tx);
+        }
+    }
+    
+    // Sort by timestamp descending (newest first)
+    return transactions.sort((a, b) => b.timestamp - a.timestamp);
 }
 
 // Support message system
@@ -285,16 +384,65 @@ export interface SupportMessage {
     isResponse: boolean; // Whether this is a response from admin
 }
 
+/**
+ * Get most recent support messages (across all users)
+ */
+export async function getSupportMessages(limit: number = 10): Promise<SupportMessage[]> {
+    // Get all message IDs, sorted by timestamp (most recent first)
+    const messageIds = await client.zRange('support_messages_by_time', 0, limit - 1, { REV: true });
+    
+    const messages: SupportMessage[] = [];
+    
+    // Get each message
+    for (const messageId of messageIds) {
+        const messageData = await client.hGetAll(`support_message:${messageId}`);
+        if (messageData && messageData.userId) {
+            // Convert Redis hash to SupportMessage object
+            const message: SupportMessage = {
+                id: messageData.id || messageId.toString(),
+                userId: parseInt(messageData.userId),
+                adminId: messageData.adminId ? parseInt(messageData.adminId) : undefined,
+                message: messageData.message || '',
+                timestamp: parseInt(messageData.timestamp || '0'),
+                isResponse: messageData.isResponse === 'true'
+            };
+            messages.push(message);
+        }
+    }
+    
+    return messages;
+}
+
+/**
+ * Save a new support message in Redis
+ * @param message The support message to save
+ */
 export async function saveSupportMessage(message: SupportMessage): Promise<void> {
-    await client.hSet('support_messages', message.id, JSON.stringify(message));
-    // Also add to a user-specific list for quick lookup
+    // Save message data in a hash
+    await client.hSet(`support_message:${message.id}`, {
+        id: message.id,
+        userId: message.userId.toString(),
+        adminId: message.adminId ? message.adminId.toString() : '',
+        message: message.message,
+        timestamp: message.timestamp.toString(),
+        isResponse: message.isResponse.toString()
+    });
+    
+    // Add to user's set of messages
     await client.sAdd(`support_messages:${message.userId}`, message.id);
     
+    // Add to sorted set for time-based retrieval
+    await client.zAdd('support_messages_by_time', {
+        score: message.timestamp,
+        value: message.id
+    });
+    
     if (DEBUG) {
-        console.log(`[STORAGE] Saved support message: ${message.id} from ${message.isResponse ? 'admin' : 'user'} ${message.userId}`);
+        console.log(`[STORAGE] Saved support message: ${message.id}`);
     }
 }
 
+// Gets all support messages for a specific user
 export async function getSupportMessagesForUser(userId: number): Promise<SupportMessage[]> {
     // Get all message IDs for this user
     const messageIds = await client.sMembers(`support_messages:${userId}`);
@@ -302,10 +450,19 @@ export async function getSupportMessagesForUser(userId: number): Promise<Support
     
     // Get all messages
     const messages: SupportMessage[] = [];
-    for (const id of messageIds) {
-        const data = await client.hGet('support_messages', id);
-        if (data) {
-            messages.push(JSON.parse(data));
+    for (const messageId of messageIds) {
+        const messageData = await client.hGetAll(`support_message:${messageId}`);
+        if (messageData && messageData.userId) {
+            // Convert Redis hash to SupportMessage object
+            const message: SupportMessage = {
+                id: messageData.id || messageId.toString(),
+                userId: parseInt(messageData.userId),
+                adminId: messageData.adminId ? parseInt(messageData.adminId) : undefined,
+                message: messageData.message || '',
+                timestamp: parseInt(messageData.timestamp || '0'),
+                isResponse: messageData.isResponse === 'true'
+            };
+            messages.push(message);
         }
     }
     
@@ -318,25 +475,53 @@ export async function getSupportMessagesForUser(userId: number): Promise<Support
  */
 
 // Save an error report to Redis
-export async function saveErrorReport(report: any): Promise<void> {
-    const id = report.id;
-    const timestamp = report.timestamp;
-    
-    // Store individual error report
-    await client.hSet(`error:${id}`, {
-        timestamp: timestamp,
-        commandName: report.commandName,
-        userId: report.userId.toString(),
-        userMessage: report.userMessage,
-        error: report.error,
-        stack: report.stack || ''
-    });
-    
-    // Add to sorted set by timestamp for easy retrieval
-    await client.zAdd('error_reports', [{
-        score: new Date(timestamp).getTime(),
-        value: id
-    }]);
+export async function saveErrorReport(errorIdOrReport: string | any, error?: Error, errorType?: string, context?: any): Promise<void> {
+    // Support both formats - either a complete report object or individual parameters
+    if (typeof errorIdOrReport === 'string') {
+        // Called with parameters: errorId, error, errorType, context
+        const errorId = errorIdOrReport;
+        const timestamp = new Date().toISOString();
+        const userId = context?.userId || 0;
+        const userMessage = context?.message || '';
+        const commandName = context?.commandName || errorType || 'unknown';
+        
+        // Store individual error report
+        await client.hSet(`error:${errorId || 'unknown'}`, {
+            timestamp: timestamp || new Date().toISOString(),
+            commandName: commandName || 'unknown',
+            userId: userId.toString(),
+            userMessage: userMessage || '',
+            error: error?.message || 'Unknown error',
+            stack: error?.stack || ''
+        });
+        
+        // Add to sorted set by timestamp for easy retrieval
+        await client.zAdd('error_reports', [{
+            score: new Date(timestamp).getTime(),
+            value: errorId
+        }]);
+    } else {
+        // Called with a report object
+        const report = errorIdOrReport;
+        const id = report.id;
+        const timestamp = report.timestamp;
+        
+        // Store individual error report
+        await client.hSet(`error:${id}`, {
+            timestamp: timestamp,
+            commandName: report.commandName,
+            userId: report.userId.toString(),
+            userMessage: report.userMessage,
+            error: report.error,
+            stack: report.stack || ''
+        });
+        
+        // Add to sorted set by timestamp for easy retrieval
+        await client.zAdd('error_reports', [{
+            score: new Date(timestamp).getTime(),
+            value: report.id
+        }]);
+    }
     
     // Maintain only the last 100 error reports
     const count = await client.zCard('error_reports');
@@ -356,7 +541,7 @@ export async function saveErrorReport(report: any): Promise<void> {
     }
     
     if (DEBUG) {
-        console.log(`[STORAGE] Saved error report: ${id}`);
+        console.log(`[STORAGE] Saved error report: ${typeof errorIdOrReport === 'string' ? errorIdOrReport : errorIdOrReport.id}`);
     }
 }
 

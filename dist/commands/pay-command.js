@@ -9,329 +9,225 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.RejectPaymentCommand = exports.ApprovePaymentCommand = exports.PendingPaymentsCommand = exports.PayNowCommand = void 0;
+exports.RejectPaymentCommand = exports.ApprovePaymentCommand = exports.PaymentActionCommand = exports.PendingPaymentsCommand = exports.PayNowCommand = void 0;
 const base_command_1 = require("./base-command");
 const bot_1 = require("../bot");
-const redis_1 = require("redis");
+const connector_1 = require("../ton-connect/connector");
 const error_handler_1 = require("../error-handler");
-// Redis client
-const redisClient = (0, redis_1.createClient)({
-    url: process.env.REDIS_URL || 'redis://localhost:6379',
-    socket: {
-        connectTimeout: 10000,
-        keepAlive: 10000
-    }
-});
-redisClient.on('error', err => console.error('Redis Client Error in Payment Command:', err));
-// Connect to Redis if not already connected
-function getRedisClient() {
-    return __awaiter(this, void 0, void 0, function* () {
-        if (!redisClient.isOpen) {
-            yield redisClient.connect();
-        }
-        return redisClient;
-    });
-}
-// Redis keys for payment system
-const PAYMENT_REQUEST_KEY = 'payment:request:';
-const PENDING_PAYMENTS_KEY = 'payment:pending';
-const APPROVED_PAYMENTS_KEY = 'payment:approved';
-const REJECTED_PAYMENTS_KEY = 'payment:rejected';
+const storage_1 = require("../ton-connect/storage");
 /**
- * Command for submitting transactions for approval
+ * Command to submit payment transactions
  */
 class PayNowCommand extends base_command_1.BaseCommand {
     constructor() {
-        super('pay-now', false, 'Submit a transaction for approval');
+        super('pay-now', 'Submit a transaction for approval');
     }
-    executeCommand(msg) {
-        var _a, _b, _c;
+    execute(msg, args) {
         return __awaiter(this, void 0, void 0, function* () {
             const chatId = msg.chat.id;
-            const userId = (_a = msg.from) === null || _a === void 0 ? void 0 : _a.id;
-            const userName = ((_b = msg.from) === null || _b === void 0 ? void 0 : _b.username) || ((_c = msg.from) === null || _c === void 0 ? void 0 : _c.first_name) || 'Unknown User';
-            if (!userId) {
-                yield bot_1.bot.sendMessage(chatId, '❌ Error: Could not identify user.');
-                return;
-            }
-            // Start the payment flow
-            yield this.startPaymentSubmission(chatId, userId, userName);
-        });
-    }
-    /**
-     * Start the payment submission process
-     */
-    startPaymentSubmission(chatId, userId, userName) {
-        return __awaiter(this, void 0, void 0, function* () {
-            const instructions = `🔹 *Transaction Submission*\n\n` +
-                `Please provide your transaction ID in the following format:\n\n` +
-                `\`ABC123XYZ\`\n\n` +
-                `This ID will be reviewed by our team for approval.`;
-            // Send instructions with custom keyboard
-            const msg = yield bot_1.bot.sendMessage(chatId, instructions, {
-                parse_mode: 'Markdown',
-                reply_markup: {
-                    force_reply: true,
-                    input_field_placeholder: 'Enter your transaction ID here',
-                    resize_keyboard: true,
-                    one_time_keyboard: true,
+            try {
+                // Check if user has a connected wallet
+                const connectedWallet = yield (0, connector_1.getConnectedWallet)(chatId);
+                if (!connectedWallet) {
+                    yield bot_1.bot.sendMessage(chatId, 'You need to connect a wallet before you can submit transactions. Use /connect to connect your wallet.');
+                    return;
                 }
-            });
-            // Register a one-time listener for the reply
-            const messageId = msg.message_id;
-            bot_1.bot.onReplyToMessage(chatId, messageId, (replyMsg) => __awaiter(this, void 0, void 0, function* () {
-                var _a;
-                try {
-                    const transactionId = (_a = replyMsg.text) === null || _a === void 0 ? void 0 : _a.trim();
-                    if (!transactionId) {
-                        yield bot_1.bot.sendMessage(chatId, '❌ Transaction ID cannot be empty. Please try again with /pay-now.');
-                        return;
+                if (!args || args.length === 0) {
+                    // No arguments provided, show instruction message
+                    yield bot_1.bot.sendMessage(chatId, '📤 *Transaction Submission* 📤\n\n' +
+                        'To submit a transaction, use the following format:\n\n' +
+                        '`/pay-now <tx_id> <amount> <description>`\n\n' +
+                        'Example:\n`/pay-now TX123456 10.5 Payment for services`\n\n' +
+                        'Your transaction will be reviewed by an admin and you will receive a notification when it\'s processed.', { parse_mode: 'Markdown' });
+                    return;
+                }
+                // Parse transaction details
+                if (args.length < 3) {
+                    yield bot_1.bot.sendMessage(chatId, '❌ Invalid format. Please provide transaction ID, amount, and description.\n' +
+                        'Example: `/pay-now TX123456 10.5 Payment for services`', { parse_mode: 'Markdown' });
+                    return;
+                }
+                const txId = args[0];
+                const amount = args[1];
+                const description = args.slice(2).join(' ');
+                // Validate input
+                if (!txId || !amount || !description) {
+                    yield bot_1.bot.sendMessage(chatId, '❌ All fields are required: transaction ID, amount, and description.');
+                    return;
+                }
+                // Create transaction submission
+                const submission = {
+                    id: `tx_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
+                    userId: chatId,
+                    txId,
+                    amount,
+                    description,
+                    status: 'pending',
+                    timestamp: Date.now()
+                };
+                // Save transaction submission
+                yield (0, storage_1.saveTransaction)(submission);
+                // Send confirmation message
+                yield bot_1.bot.sendMessage(chatId, '✅ Transaction submitted successfully!\n\n' +
+                    `*Transaction ID:* ${submission.id}\n` +
+                    `*Amount:* ${amount} TON\n` +
+                    `*Description:* ${description}\n\n` +
+                    'Your transaction will be reviewed by an admin and you will receive a notification when it\'s processed.', { parse_mode: 'Markdown' });
+                // Notify admins about new transaction
+                const adminIds = (process.env.ADMIN_IDS || '').split(',').map(id => parseInt(id.trim()));
+                for (const adminId of adminIds) {
+                    if (adminId && !isNaN(adminId)) {
+                        yield bot_1.bot.sendMessage(adminId, '🔔 *New Transaction Submission* 🔔\n\n' +
+                            `*Transaction ID:* ${submission.id}\n` +
+                            `*User ID:* ${chatId}\n` +
+                            `*Amount:* ${amount} TON\n` +
+                            `*Description:* ${description}\n\n` +
+                            'Use `/pending` to review all pending transactions.', { parse_mode: 'Markdown' });
                     }
-                    // Process the transaction ID
-                    yield this.processTransactionSubmission(chatId, userId, userName, transactionId);
                 }
-                catch (error) {
-                    error_handler_1.ErrorHandler.handleError({
-                        type: error_handler_1.ErrorType.COMMAND_HANDLER,
-                        message: `Error in pay-now reply handler: ${(error === null || error === void 0 ? void 0 : error.message) || error}`,
-                        command: 'pay-now',
-                        userId,
-                        timestamp: Date.now(),
-                        stack: error === null || error === void 0 ? void 0 : error.stack
-                    });
-                    yield bot_1.bot.sendMessage(chatId, '❌ An error occurred while processing your transaction. Please try again later.');
-                }
-            }));
-        });
-    }
-    /**
-     * Process the transaction submission
-     */
-    processTransactionSubmission(chatId, userId, userName, transactionId) {
-        return __awaiter(this, void 0, void 0, function* () {
-            // Generate a unique payment request ID
-            const requestId = `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-            // Create payment request object
-            const paymentRequest = {
-                id: requestId,
-                userId,
-                chatId,
-                transactionId,
-                timestamp: Date.now(),
-                status: 'pending',
-                userName
-            };
-            // Store in Redis
-            const redis = yield getRedisClient();
-            yield redis.set(`${PAYMENT_REQUEST_KEY}${requestId}`, JSON.stringify(paymentRequest));
-            yield redis.sAdd(PENDING_PAYMENTS_KEY, requestId);
-            // Notify user
-            yield bot_1.bot.sendMessage(chatId, `✅ Your transaction ID \`${transactionId}\` has been submitted for review.\n\n` +
-                `Reference number: \`${requestId}\`\n\n` +
-                `You will be notified once it has been processed by our team.`, {
-                parse_mode: 'Markdown',
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: '🏠 Back to Menu', callback_data: 'back_to_menu' }]
-                    ]
-                }
-            });
-            // Notify admins
-            yield this.notifyAdminsNewPayment(paymentRequest);
-        });
-    }
-    /**
-     * Notify admins about a new payment request
-     */
-    notifyAdminsNewPayment(paymentRequest) {
-        return __awaiter(this, void 0, void 0, function* () {
-            // Get admin IDs from environment variable
-            const adminIdsEnv = process.env.ADMIN_IDS || '';
-            const adminIds = adminIdsEnv.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
-            if (!adminIds.length) {
-                console.warn('No admin IDs configured for payment notifications');
-                return;
             }
-            const notification = `🔔 *New Transaction Submission*\n\n` +
-                `From: ${paymentRequest.userName || 'User'} (ID: ${paymentRequest.userId})\n` +
-                `Transaction ID: \`${paymentRequest.transactionId}\`\n` +
-                `Reference: \`${paymentRequest.id}\`\n` +
-                `Time: ${new Date(paymentRequest.timestamp).toLocaleString()}\n\n` +
-                `Use /approve ${paymentRequest.id} or /reject ${paymentRequest.id} to process.`;
-            for (const adminId of adminIds) {
-                try {
-                    yield bot_1.bot.sendMessage(adminId, notification, { parse_mode: 'Markdown' });
+            catch (error) {
+                if (error instanceof Error) {
+                    yield error_handler_1.ErrorHandler.handleError(error, error_handler_1.ErrorType.COMMAND_HANDLER, {
+                        commandName: 'pay-now',
+                        userId: chatId,
+                        message: msg.text || ''
+                    });
                 }
-                catch (error) {
-                    console.error(`Failed to notify admin ${adminId}:`, error);
-                }
+                yield bot_1.bot.sendMessage(chatId, '❌ Error submitting transaction. Please try again later.');
             }
         });
     }
 }
 exports.PayNowCommand = PayNowCommand;
 /**
- * Command for admins to list pending payment requests
+ * Command to view pending transactions (admin only)
  */
-class PendingPaymentsCommand extends base_command_1.BaseCommand {
+class PendingPaymentsCommand extends base_command_1.AdminCommand {
     constructor() {
-        super('pending', true, 'List pending payment requests (admin only)');
+        super('pending', 'View pending transactions');
     }
-    executeCommand(msg) {
+    executeAdmin(msg, _args) {
         return __awaiter(this, void 0, void 0, function* () {
             const chatId = msg.chat.id;
-            const redis = yield getRedisClient();
-            // Get all pending payment requests
-            const pendingIds = yield redis.sMembers(PENDING_PAYMENTS_KEY);
-            if (!pendingIds.length) {
-                yield bot_1.bot.sendMessage(chatId, '✅ No pending payment requests.');
-                return;
-            }
-            let message = `🔸 *Pending Payment Requests (${pendingIds.length}):*\n\n`;
-            for (const requestId of pendingIds) {
-                const requestData = yield redis.get(`${PAYMENT_REQUEST_KEY}${requestId}`);
-                if (requestData) {
-                    try {
-                        const request = JSON.parse(requestData);
-                        const date = new Date(request.timestamp).toLocaleString();
-                        const userName = request.userName || 'User';
-                        message += `🆔 Ref: \`${request.id}\`\n`;
-                        message += `👤 ${userName} (ID: ${request.userId})\n`;
-                        message += `🧾 Transaction ID: \`${request.transactionId}\`\n`;
-                        message += `🕒 ${date}\n`;
-                        message += `✅ /approve ${request.id}\n`;
-                        message += `❌ /reject ${request.id}\n\n`;
-                    }
-                    catch (e) {
-                        message += `Error parsing request ${requestId}\n\n`;
-                    }
+            try {
+                // Get all pending transactions
+                const pendingTransactions = yield (0, storage_1.getAllPendingTransactions)();
+                if (pendingTransactions.length === 0) {
+                    yield bot_1.bot.sendMessage(chatId, '📊 *Pending Transactions* 📊\n\n' +
+                        'There are no pending transactions at this time.', { parse_mode: 'Markdown' });
+                    return;
                 }
+                // Format transactions list
+                let message = '📊 *Pending Transactions* 📊\n\n';
+                for (const tx of pendingTransactions) {
+                    message += `*ID:* ${tx.id}\n` +
+                        `*User:* ${tx.userId}\n` +
+                        `*Amount:* ${tx.amount} TON\n` +
+                        `*Description:* ${tx.description}\n` +
+                        `*Submitted:* ${new Date(tx.timestamp).toLocaleString()}\n\n` +
+                        `To approve: /approve ${tx.id}\n` +
+                        `To reject: /reject ${tx.id}\n\n` +
+                        `-----------------------------------\n\n`;
+                }
+                yield bot_1.bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
             }
-            yield bot_1.bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+            catch (error) {
+                if (error instanceof Error) {
+                    yield error_handler_1.ErrorHandler.handleError(error, error_handler_1.ErrorType.COMMAND_HANDLER, {
+                        commandName: 'pending',
+                        userId: chatId,
+                        message: msg.text || ''
+                    });
+                }
+                yield bot_1.bot.sendMessage(chatId, '❌ Error fetching pending transactions. Please try again later.');
+            }
         });
     }
 }
 exports.PendingPaymentsCommand = PendingPaymentsCommand;
 /**
- * Base class for approve/reject commands
+ * Abstract base class for payment action commands
  */
-class PaymentActionCommand extends base_command_1.BaseCommand {
-    constructor(commandName, description, action) {
-        super(commandName, true, description);
-        this.action = action;
-    }
-    executeCommand(msg) {
-        var _a, _b;
+class PaymentActionCommand extends base_command_1.AdminCommand {
+    processPaymentAction(msg, args, action) {
         return __awaiter(this, void 0, void 0, function* () {
             const chatId = msg.chat.id;
-            const adminId = (_a = msg.from) === null || _a === void 0 ? void 0 : _a.id;
-            if (!adminId) {
-                yield bot_1.bot.sendMessage(chatId, '❌ Error: Could not identify admin user.');
+            if (!args || args.length === 0) {
+                yield bot_1.bot.sendMessage(chatId, `Please provide a transaction ID to ${action === 'approved' ? 'approve' : 'reject'}.\n` +
+                    `Example: /${action === 'approved' ? 'approve' : 'reject'} <transaction_id>`);
                 return;
             }
-            // Extract payment request ID
-            const requestId = (_b = msg.text) === null || _b === void 0 ? void 0 : _b.substring(`/${this.name}`.length).trim();
-            if (!requestId) {
-                yield bot_1.bot.sendMessage(chatId, `❌ Please provide a payment reference ID: /${this.name} <reference_id>`);
-                return;
-            }
-            yield this.processPaymentAction(chatId, adminId, requestId);
-        });
-    }
-    /**
-     * Process payment approval or rejection
-     */
-    processPaymentAction(chatId, _adminId, requestId) {
-        return __awaiter(this, void 0, void 0, function* () {
-            const redis = yield getRedisClient();
-            // Get payment request data
-            const requestData = yield redis.get(`${PAYMENT_REQUEST_KEY}${requestId}`);
-            if (!requestData) {
-                yield bot_1.bot.sendMessage(chatId, `❌ Payment request with ID ${requestId} not found.`);
+            const txId = args[0] || '';
+            if (!txId) {
+                yield bot_1.bot.sendMessage(chatId, `Please provide a valid transaction ID to ${action === 'approved' ? 'approve' : 'reject'}.`);
                 return;
             }
             try {
-                // Parse payment request
-                const request = JSON.parse(requestData);
-                // Check if already processed
-                if (request.status !== 'pending') {
-                    yield bot_1.bot.sendMessage(chatId, `❌ This payment request has already been ${request.status}.`);
+                // Get transaction
+                const transaction = yield (0, storage_1.getTransaction)(txId);
+                if (!transaction) {
+                    yield bot_1.bot.sendMessage(chatId, '❌ Transaction not found. Please check the ID and try again.');
                     return;
                 }
-                // Update status
-                request.status = this.action === 'approve' ? 'approved' : 'rejected';
-                yield redis.set(`${PAYMENT_REQUEST_KEY}${requestId}`, JSON.stringify(request));
-                // Move from pending to appropriate set
-                yield redis.sRem(PENDING_PAYMENTS_KEY, requestId);
-                yield redis.sAdd(this.action === 'approve' ? APPROVED_PAYMENTS_KEY : REJECTED_PAYMENTS_KEY, requestId);
-                // Notify user
-                yield this.notifyUser(request);
+                if (transaction.status !== 'pending') {
+                    yield bot_1.bot.sendMessage(chatId, `❌ This transaction has already been ${transaction.status}. No action taken.`);
+                    return;
+                }
+                // Update transaction status
+                transaction.status = action;
+                transaction.reviewedBy = chatId;
+                transaction.reviewedAt = Date.now();
+                transaction.reviewNote = args.length > 1 ? args.slice(1).join(' ') : '';
+                yield (0, storage_1.updateTransaction)(transaction);
+                // Notify user about transaction status
+                yield bot_1.bot.sendMessage(transaction.userId, `${action === 'approved' ? '✅' : '❌'} Your transaction ${transaction.id} has been ${action}.\n\n` +
+                    `*Amount:* ${transaction.amount} TON\n` +
+                    `*Description:* ${transaction.description}\n` +
+                    (transaction.reviewNote ? `*Note:* ${transaction.reviewNote}\n` : ''), { parse_mode: 'Markdown' });
                 // Confirm to admin
-                yield bot_1.bot.sendMessage(chatId, `✅ Payment ${requestId} has been ${this.action}d successfully.`);
+                yield bot_1.bot.sendMessage(chatId, `✅ Transaction ${transaction.id} has been marked as ${action}.\n\n` +
+                    `Notification sent to user ${transaction.userId}.`);
             }
             catch (error) {
-                console.error(`Error processing payment ${this.action}:`, error);
-                yield bot_1.bot.sendMessage(chatId, `❌ An error occurred while ${this.action}ing payment ${requestId}.`);
-            }
-        });
-    }
-    /**
-     * Notify the user about their payment status
-     */
-    notifyUser(request) {
-        return __awaiter(this, void 0, void 0, function* () {
-            if (!request.chatId)
-                return;
-            try {
-                if (this.action === 'approve') {
-                    yield bot_1.bot.sendMessage(request.chatId, `✅ *Transaction Approved*\n\n` +
-                        `Your transaction with ID \`${request.transactionId}\` has been approved.\n` +
-                        `Reference: \`${request.id}\`\n\n` +
-                        `Thank you for using our service!`, {
-                        parse_mode: 'Markdown',
-                        reply_markup: {
-                            inline_keyboard: [
-                                [{ text: '🏠 Back to Menu', callback_data: 'back_to_menu' }]
-                            ]
-                        }
+                if (error instanceof Error) {
+                    yield error_handler_1.ErrorHandler.handleError(error, error_handler_1.ErrorType.COMMAND_HANDLER, {
+                        commandName: action === 'approved' ? 'approve' : 'reject',
+                        userId: chatId,
+                        message: msg.text || ''
                     });
                 }
-                else {
-                    yield bot_1.bot.sendMessage(request.chatId, `❌ *Transaction Rejected*\n\n` +
-                        `Your transaction with ID \`${request.transactionId}\` has been rejected.\n` +
-                        `Reference: \`${request.id}\`\n\n` +
-                        `Please contact support for more information using /support.`, {
-                        parse_mode: 'Markdown',
-                        reply_markup: {
-                            inline_keyboard: [
-                                [{ text: '🏠 Back to Menu', callback_data: 'back_to_menu' }],
-                                [{ text: '📞 Contact Support', callback_data: 'contact_support' }]
-                            ]
-                        }
-                    });
-                }
-            }
-            catch (error) {
-                console.error(`Failed to notify user ${request.userId}:`, error);
+                yield bot_1.bot.sendMessage(chatId, `❌ Error ${action === 'approved' ? 'approving' : 'rejecting'} transaction. Please try again later.`);
             }
         });
     }
 }
+exports.PaymentActionCommand = PaymentActionCommand;
 /**
- * Command for admins to approve payment requests
+ * Command to approve a transaction (admin only)
  */
 class ApprovePaymentCommand extends PaymentActionCommand {
     constructor() {
-        super('approve', 'Approve a payment request (admin only)', 'approve');
+        super('approve', 'Approve a pending transaction');
+    }
+    executeAdmin(msg, _args) {
+        return __awaiter(this, void 0, void 0, function* () {
+            yield this.processPaymentAction(msg, _args, 'approved');
+        });
     }
 }
 exports.ApprovePaymentCommand = ApprovePaymentCommand;
 /**
- * Command for admins to reject payment requests
+ * Command to reject a transaction (admin only)
  */
 class RejectPaymentCommand extends PaymentActionCommand {
     constructor() {
-        super('reject', 'Reject a payment request (admin only)', 'reject');
+        super('reject', 'Reject a pending transaction');
+    }
+    executeAdmin(msg, _args) {
+        return __awaiter(this, void 0, void 0, function* () {
+            yield this.processPaymentAction(msg, _args, 'rejected');
+        });
     }
 }
 exports.RejectPaymentCommand = RejectPaymentCommand;

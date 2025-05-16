@@ -32,7 +32,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.TonConnectStorage = exports.getAnalyticsSummary = exports.trackAnalyticsEvent = exports.getTutorialState = exports.saveTutorialState = exports.saveErrorReport = exports.getSupportMessagesForUser = exports.saveSupportMessage = exports.getAllPendingTransactions = exports.getTransactionSubmission = exports.updateTransactionStatus = exports.saveTransactionSubmission = exports.getAllTrackedUsers = exports.getAllConnectedUsers = exports.getUserData = exports.removeConnectedUser = exports.updateUserActivity = exports.saveConnectedUser = exports.trackUserInteraction = exports.invalidateWalletCache = exports.getCachedWalletData = exports.getRedisClient = exports.initRedisClient = void 0;
+exports.TonConnectStorage = exports.getAnalyticsSummary = exports.trackAnalyticsEvent = exports.getTutorialState = exports.saveTutorialState = exports.saveErrorReport = exports.getSupportMessagesForUser = exports.saveSupportMessage = exports.getSupportMessages = exports.getAllPendingTransactions = exports.updateTransaction = exports.getTransaction = exports.saveTransaction = exports.getTransactionSubmission = exports.updateTransactionStatus = exports.saveTransactionSubmission = exports.getAllTrackedUsers = exports.getAllConnectedUsers = exports.getUserData = exports.removeConnectedUser = exports.updateUserActivity = exports.saveConnectedUser = exports.trackUserInteraction = exports.invalidateWalletCache = exports.getCachedWalletData = exports.getRedisClient = exports.initRedisClient = void 0;
 const redis_1 = require("redis");
 const process = __importStar(require("process"));
 const DEBUG = process.env.DEBUG_MODE === 'true';
@@ -248,11 +248,14 @@ function getAllTrackedUsers() {
     });
 }
 exports.getAllTrackedUsers = getAllTrackedUsers;
-function saveTransactionSubmission(chatId, transactionId) {
+function saveTransactionSubmission(chatId, transactionId, amount = '0', description = '') {
     return __awaiter(this, void 0, void 0, function* () {
         const submission = {
             id: transactionId,
             userId: chatId,
+            txId: transactionId,
+            amount: amount,
+            description: description,
             timestamp: Date.now(),
             status: 'pending'
         };
@@ -288,26 +291,141 @@ function getTransactionSubmission(transactionId) {
     });
 }
 exports.getTransactionSubmission = getTransactionSubmission;
+/**
+ * Save a new transaction submission to Redis
+ */
+function saveTransaction(transaction) {
+    return __awaiter(this, void 0, void 0, function* () {
+        yield client.hSet(`transaction:${transaction.id}`, {
+            userId: transaction.userId.toString(),
+            txId: transaction.txId,
+            amount: transaction.amount,
+            description: transaction.description,
+            status: transaction.status,
+            timestamp: transaction.timestamp.toString()
+        });
+        // Also add to user's transaction list
+        yield client.sAdd(`user:${transaction.userId}:transactions`, transaction.id);
+        // Add to global transaction list by status
+        yield client.sAdd(`transactions:${transaction.status}`, transaction.id);
+    });
+}
+exports.saveTransaction = saveTransaction;
+/**
+ * Get a transaction by ID
+ */
+function getTransaction(id) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const transactionData = yield client.hGetAll(`transaction:${id}`);
+        if (!transactionData || Object.keys(transactionData).length === 0) {
+            return null;
+        }
+        return {
+            id,
+            userId: parseInt(transactionData.userId || '0'),
+            txId: transactionData.txId || id,
+            amount: transactionData.amount || '0',
+            description: transactionData.description || '',
+            status: (transactionData.status || 'pending'),
+            timestamp: parseInt(transactionData.timestamp || '0'),
+            reviewedBy: transactionData.reviewedBy ? parseInt(transactionData.reviewedBy) : undefined,
+            reviewedAt: transactionData.reviewedAt ? parseInt(transactionData.reviewedAt) : undefined,
+            reviewNote: transactionData.reviewNote
+        };
+    });
+}
+exports.getTransaction = getTransaction;
+/**
+ * Update an existing transaction
+ */
+function updateTransaction(transaction) {
+    return __awaiter(this, void 0, void 0, function* () {
+        // First remove from status-specific list
+        const tx = yield getTransaction(transaction.id);
+        if (tx && tx.status !== transaction.status) {
+            yield client.sRem(`transactions:${tx.status}`, transaction.id);
+            yield client.sAdd(`transactions:${transaction.status}`, transaction.id);
+        }
+        // Update the transaction data
+        yield client.hSet(`transaction:${transaction.id}`, Object.assign(Object.assign(Object.assign({ userId: transaction.userId.toString(), txId: transaction.txId, amount: transaction.amount, description: transaction.description, status: transaction.status, timestamp: transaction.timestamp.toString() }, (transaction.reviewedBy && { reviewedBy: transaction.reviewedBy.toString() })), (transaction.reviewedAt && { reviewedAt: transaction.reviewedAt.toString() })), (transaction.reviewNote && { reviewNote: transaction.reviewNote })));
+    });
+}
+exports.updateTransaction = updateTransaction;
+/**
+ * Get all pending transactions
+ */
 function getAllPendingTransactions() {
     return __awaiter(this, void 0, void 0, function* () {
-        const transactions = yield client.hGetAll('transaction_submissions');
-        return Object.values(transactions)
-            .map(data => JSON.parse(data))
-            .filter((submission) => submission.status === 'pending');
+        const pendingIds = yield client.sMembers('transactions:pending');
+        const transactions = [];
+        for (const id of pendingIds) {
+            const tx = yield getTransaction(id);
+            if (tx) {
+                transactions.push(tx);
+            }
+        }
+        // Sort by timestamp descending (newest first)
+        return transactions.sort((a, b) => b.timestamp - a.timestamp);
     });
 }
 exports.getAllPendingTransactions = getAllPendingTransactions;
+/**
+ * Get most recent support messages (across all users)
+ */
+function getSupportMessages(limit = 10) {
+    return __awaiter(this, void 0, void 0, function* () {
+        // Get all message IDs, sorted by timestamp (most recent first)
+        const messageIds = yield client.zRange('support_messages_by_time', 0, limit - 1, { REV: true });
+        const messages = [];
+        // Get each message
+        for (const messageId of messageIds) {
+            const messageData = yield client.hGetAll(`support_message:${messageId}`);
+            if (messageData && messageData.userId) {
+                // Convert Redis hash to SupportMessage object
+                const message = {
+                    id: messageData.id || messageId.toString(),
+                    userId: parseInt(messageData.userId),
+                    adminId: messageData.adminId ? parseInt(messageData.adminId) : undefined,
+                    message: messageData.message || '',
+                    timestamp: parseInt(messageData.timestamp || '0'),
+                    isResponse: messageData.isResponse === 'true'
+                };
+                messages.push(message);
+            }
+        }
+        return messages;
+    });
+}
+exports.getSupportMessages = getSupportMessages;
+/**
+ * Save a new support message in Redis
+ * @param message The support message to save
+ */
 function saveSupportMessage(message) {
     return __awaiter(this, void 0, void 0, function* () {
-        yield client.hSet('support_messages', message.id, JSON.stringify(message));
-        // Also add to a user-specific list for quick lookup
+        // Save message data in a hash
+        yield client.hSet(`support_message:${message.id}`, {
+            id: message.id,
+            userId: message.userId.toString(),
+            adminId: message.adminId ? message.adminId.toString() : '',
+            message: message.message,
+            timestamp: message.timestamp.toString(),
+            isResponse: message.isResponse.toString()
+        });
+        // Add to user's set of messages
         yield client.sAdd(`support_messages:${message.userId}`, message.id);
+        // Add to sorted set for time-based retrieval
+        yield client.zAdd('support_messages_by_time', {
+            score: message.timestamp,
+            value: message.id
+        });
         if (DEBUG) {
-            console.log(`[STORAGE] Saved support message: ${message.id} from ${message.isResponse ? 'admin' : 'user'} ${message.userId}`);
+            console.log(`[STORAGE] Saved support message: ${message.id}`);
         }
     });
 }
 exports.saveSupportMessage = saveSupportMessage;
+// Gets all support messages for a specific user
 function getSupportMessagesForUser(userId) {
     return __awaiter(this, void 0, void 0, function* () {
         // Get all message IDs for this user
@@ -316,10 +434,19 @@ function getSupportMessagesForUser(userId) {
             return [];
         // Get all messages
         const messages = [];
-        for (const id of messageIds) {
-            const data = yield client.hGet('support_messages', id);
-            if (data) {
-                messages.push(JSON.parse(data));
+        for (const messageId of messageIds) {
+            const messageData = yield client.hGetAll(`support_message:${messageId}`);
+            if (messageData && messageData.userId) {
+                // Convert Redis hash to SupportMessage object
+                const message = {
+                    id: messageData.id || messageId.toString(),
+                    userId: parseInt(messageData.userId),
+                    adminId: messageData.adminId ? parseInt(messageData.adminId) : undefined,
+                    message: messageData.message || '',
+                    timestamp: parseInt(messageData.timestamp || '0'),
+                    isResponse: messageData.isResponse === 'true'
+                };
+                messages.push(message);
             }
         }
         // Sort by timestamp
@@ -331,24 +458,51 @@ exports.getSupportMessagesForUser = getSupportMessagesForUser;
  * Error Reporting System
  */
 // Save an error report to Redis
-function saveErrorReport(report) {
+function saveErrorReport(errorIdOrReport, error, errorType, context) {
     return __awaiter(this, void 0, void 0, function* () {
-        const id = report.id;
-        const timestamp = report.timestamp;
-        // Store individual error report
-        yield client.hSet(`error:${id}`, {
-            timestamp: timestamp,
-            commandName: report.commandName,
-            userId: report.userId.toString(),
-            userMessage: report.userMessage,
-            error: report.error,
-            stack: report.stack || ''
-        });
-        // Add to sorted set by timestamp for easy retrieval
-        yield client.zAdd('error_reports', [{
-                score: new Date(timestamp).getTime(),
-                value: id
-            }]);
+        // Support both formats - either a complete report object or individual parameters
+        if (typeof errorIdOrReport === 'string') {
+            // Called with parameters: errorId, error, errorType, context
+            const errorId = errorIdOrReport;
+            const timestamp = new Date().toISOString();
+            const userId = (context === null || context === void 0 ? void 0 : context.userId) || 0;
+            const userMessage = (context === null || context === void 0 ? void 0 : context.message) || '';
+            const commandName = (context === null || context === void 0 ? void 0 : context.commandName) || errorType || 'unknown';
+            // Store individual error report
+            yield client.hSet(`error:${errorId || 'unknown'}`, {
+                timestamp: timestamp || new Date().toISOString(),
+                commandName: commandName || 'unknown',
+                userId: userId.toString(),
+                userMessage: userMessage || '',
+                error: (error === null || error === void 0 ? void 0 : error.message) || 'Unknown error',
+                stack: (error === null || error === void 0 ? void 0 : error.stack) || ''
+            });
+            // Add to sorted set by timestamp for easy retrieval
+            yield client.zAdd('error_reports', [{
+                    score: new Date(timestamp).getTime(),
+                    value: errorId
+                }]);
+        }
+        else {
+            // Called with a report object
+            const report = errorIdOrReport;
+            const id = report.id;
+            const timestamp = report.timestamp;
+            // Store individual error report
+            yield client.hSet(`error:${id}`, {
+                timestamp: timestamp,
+                commandName: report.commandName,
+                userId: report.userId.toString(),
+                userMessage: report.userMessage,
+                error: report.error,
+                stack: report.stack || ''
+            });
+            // Add to sorted set by timestamp for easy retrieval
+            yield client.zAdd('error_reports', [{
+                    score: new Date(timestamp).getTime(),
+                    value: report.id
+                }]);
+        }
         // Maintain only the last 100 error reports
         const count = yield client.zCard('error_reports');
         if (count > 100) {
@@ -364,7 +518,7 @@ function saveErrorReport(report) {
             }
         }
         if (DEBUG) {
-            console.log(`[STORAGE] Saved error report: ${id}`);
+            console.log(`[STORAGE] Saved error report: ${typeof errorIdOrReport === 'string' ? errorIdOrReport : errorIdOrReport.id}`);
         }
     });
 }

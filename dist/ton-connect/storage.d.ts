@@ -52,9 +52,39 @@ export interface TransactionSubmission {
     approvedBy?: number;
     notes?: string;
 }
-export declare function saveTransactionSubmission(chatId: number, transactionId: string): Promise<void>;
+export declare function saveTransactionSubmission(chatId: number, transactionId: string, amount?: string, description?: string): Promise<void>;
 export declare function updateTransactionStatus(transactionId: string, status: 'approved' | 'rejected', adminId: number, notes?: string): Promise<TransactionSubmission | null>;
 export declare function getTransactionSubmission(transactionId: string): Promise<TransactionSubmission | null>;
+/**
+ * TransactionSubmission interface for payment submissions
+ */
+export interface TransactionSubmission {
+    id: string;
+    userId: number;
+    txId: string;
+    amount: string;
+    description: string;
+    status: 'pending' | 'approved' | 'rejected';
+    timestamp: number;
+    reviewedBy?: number;
+    reviewedAt?: number;
+    reviewNote?: string;
+}
+/**
+ * Save a new transaction submission to Redis
+ */
+export declare function saveTransaction(transaction: TransactionSubmission): Promise<void>;
+/**
+ * Get a transaction by ID
+ */
+export declare function getTransaction(id: string): Promise<TransactionSubmission | null>;
+/**
+ * Update an existing transaction
+ */
+export declare function updateTransaction(transaction: TransactionSubmission): Promise<void>;
+/**
+ * Get all pending transactions
+ */
 export declare function getAllPendingTransactions(): Promise<TransactionSubmission[]>;
 export interface SupportMessage {
     id: string;
@@ -64,12 +94,20 @@ export interface SupportMessage {
     timestamp: number;
     isResponse: boolean;
 }
+/**
+ * Get most recent support messages (across all users)
+ */
+export declare function getSupportMessages(limit?: number): Promise<SupportMessage[]>;
+/**
+ * Save a new support message in Redis
+ * @param message The support message to save
+ */
 export declare function saveSupportMessage(message: SupportMessage): Promise<void>;
 export declare function getSupportMessagesForUser(userId: number): Promise<SupportMessage[]>;
 /**
  * Error Reporting System
  */
-export declare function saveErrorReport(report: any): Promise<void>;
+export declare function saveErrorReport(errorIdOrReport: string | any, error?: Error, errorType?: string, context?: any): Promise<void>;
 /**
  * Tutorial System Storage
  */

@@ -11,7 +11,7 @@ export class AnalyticsCommand extends AdminCommand {
         super('analytics', 'View bot usage statistics');
     }
     
-    async executeAdmin(msg: TelegramBot.Message): Promise<void> {
+    async executeAdmin(msg: TelegramBot.Message, _args?: string[]): Promise<void> {
         const chatId = msg.chat.id;
         
         // Show loading message
@@ -24,17 +24,17 @@ export class AnalyticsCommand extends AdminCommand {
             // Format analytics report
             const timestamp = new Date(analytics.timestamp).toLocaleString();
             
-            let report = `ud83dudcca *Bot Analytics Dashboard* ud83dudcca\n`;
+            let report = `\ud83d\udcca *Bot Analytics Dashboard* \ud83d\udcca\n`;
             report += `\n*Generated:* ${timestamp}\n\n`;
             
             // User statistics
-            report += `ud83dudc65 *User Statistics*\n`;
+            report += `\ud83d\udc65 *User Statistics*\n`;
             report += `\u2022 Total Users: ${analytics.totalUsers}\n`;
             report += `\u2022 Users with Connected Wallets: ${analytics.connectedUsers}\n`;
             report += `\u2022 Active Users (24h): ${analytics.activeUsers24h}\n\n`;
             
             // Transaction statistics
-            report += `ud83dudcb8 *Transaction Statistics*\n`;
+            report += `\ud83d\udcb8 *Transaction Statistics*\n`;
             report += `\u2022 Total Submissions: ${analytics.transactionStats.total}\n`;
             report += `\u2022 Pending: ${analytics.transactionStats.pending}\n`;
             report += `\u2022 Approved: ${analytics.transactionStats.approved}\n`;

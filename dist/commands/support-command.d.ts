@@ -1,25 +1,21 @@
-import { BaseCommand } from './base-command';
 import TelegramBot from 'node-telegram-bot-api';
+import { BaseCommand } from './base-command';
 /**
- * Command for handling user support requests
+ * Command to handle user support requests and admin responses
  */
 export declare class SupportCommand extends BaseCommand {
     constructor();
-    protected executeCommand(msg: TelegramBot.Message, _match?: RegExpExecArray | null): Promise<void>;
+    execute(msg: TelegramBot.Message, args?: string[]): Promise<void>;
     /**
-     * Handle support requests from regular users
+     * Show support dashboard to admin
      */
-    private handleUserSupport;
+    private showSupportDashboard;
     /**
-     * Handle admin responses to support requests
+     * Handle admin response to a user
      */
-    private handleAdminSupport;
+    private handleAdminResponse;
     /**
-     * Show list of pending support requests to admin
+     * Handle user support message
      */
-    private showPendingSupportRequests;
-    /**
-     * Notify all admins about a new support request
-     */
-    private notifyAdmins;
+    private handleUserMessage;
 }

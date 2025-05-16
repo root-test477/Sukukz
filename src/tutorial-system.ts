@@ -1,6 +1,7 @@
 import TelegramBot from 'node-telegram-bot-api';
 import { bot } from './bot';
-import { getTutorialState, saveTutorialState, TutorialState } from './ton-connect/storage';
+import { saveTutorialState, TutorialState, getTutorialState } from './ton-connect/storage';
+export { getTutorialState } from './ton-connect/storage';
 import { withErrorHandling } from './error-handler';
 
 // Define tutorial steps
@@ -225,6 +226,29 @@ export async function handleTutorialCallback(query: TelegramBot.CallbackQuery, m
                 'No problem! You can restart the tutorial anytime with /tutorial.'
             );
             break;
+    }
+}
+
+/**
+ * Skip the tutorial for a user
+ */
+export async function skipTutorial(chatId: number): Promise<void> {
+    const state = await getTutorialState(chatId);
+    
+    if (state && !state.completed) {
+        state.skipped = true;
+        state.lastUpdatedAt = Date.now();
+        await saveTutorialState(state);
+        
+        await bot.sendMessage(
+            chatId,
+            'Tutorial skipped. You can restart it anytime with /tutorial.'
+        );
+    } else {
+        await bot.sendMessage(
+            chatId,
+            'There is no active tutorial to skip. Use /tutorial to start one.'
+        );
     }
 }
 

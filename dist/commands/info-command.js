@@ -13,40 +13,70 @@ exports.InfoCommand = void 0;
 const base_command_1 = require("./base-command");
 const bot_1 = require("../bot");
 /**
- * Command to provide help and feature recommendations to users
+ * Command to display bot information and help
  */
 class InfoCommand extends base_command_1.BaseCommand {
     constructor() {
-        super('info', false, 'Get help and feature recommendations');
+        super('info', 'Display information about the bot and available commands');
     }
-    executeCommand(msg) {
+    execute(msg, _args) {
         return __awaiter(this, void 0, void 0, function* () {
             const chatId = msg.chat.id;
-            const message = `🔹 *Welcome to TON Connect Bot!* 🔹\n\n` +
-                `Here's what you can do:\n\n` +
-                `🔸 *Connect Your Wallet:*\n` +
-                `Use /connect to link your @wallet to this bot\n\n` +
-                `🔸 *View Wallet Info:*\n` +
-                `Use /mywallet to see your connected wallet details\n\n` +
-                `🔸 *Submit Transactions:*\n` +
-                `Use /pay-now to submit transactions for approval\n\n` +
-                `🔸 *Withdraw Funds:*\n` +
-                `Use /withdraw to access the withdrawal interface\n\n` +
-                `🔸 *Get Support:*\n` +
-                `Use /support [message] to contact our team\n\n` +
-                `🔸 *Available Commands:*\n` +
-                `/start - Start or restart the bot\n` +
-                `/connect - Connect your wallet\n` +
-                `/disconnect - Disconnect your wallet\n` +
-                `/mywallet - View your wallet details\n` +
-                `/tutorial - Start the interactive tutorial\n` +
-                `/skip - Skip the tutorial\n` +
-                `/pay-now - Submit a transaction\n` +
-                `/withdraw - Access the withdrawal interface\n` +
-                `/support - Contact support team\n` +
-                `/info - Show this help message\n\n` +
-                `Need more help? Use /support to contact our team.`;
-            yield bot_1.bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+            const helpText = `
+🤖 *TON Connect Bot Help* 🤖
+
+
+*Wallet Connection*
+
+• Use /connect to connect your TON wallet
+
+• We recommend @wallet for the best experience
+
+
+*Transactions*
+
+• Submit transactions using /pay-now
+
+• Check approval status with /pending
+
+
+*Withdrawals*
+
+• Use /withdraw to request withdrawals
+
+
+*Support*
+
+• Need help? Use /support [message]
+
+• An admin will respond shortly
+
+
+*Available Commands*
+
+/connect - Connect your TON wallet
+
+/disconnect - Disconnect your wallet
+
+/mywallet - View your wallet details
+
+/pay-now - Submit a transaction
+
+/pending - View pending transactions
+
+/withdraw - Access withdrawal form
+
+/support - Contact support
+
+/tutorial - Start the interactive tutorial
+
+/skip - Skip the tutorial
+
+/info - Show this help message
+
+
+If you're new, start with the /tutorial command to learn how to use this bot.`;
+            yield bot_1.bot.sendMessage(chatId, helpText, { parse_mode: 'Markdown' });
         });
     }
 }

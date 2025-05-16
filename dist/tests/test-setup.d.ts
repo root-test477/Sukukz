@@ -3,7 +3,25 @@
  */
 /// <reference types="jest" />
 import TelegramBot from 'node-telegram-bot-api';
-declare const mockRedisClient: any;
+declare const mockRedisClient: {
+    connect: jest.Mock<any, any, any>;
+    isOpen: boolean;
+    hSet: jest.Mock<any, any, any>;
+    hGetAll: jest.Mock<any, any, any>;
+    zAdd: jest.Mock<any, any, any>;
+    zRange: jest.Mock<any, any, any>;
+    get: jest.Mock<any, any, any>;
+    set: jest.Mock<any, any, any>;
+    exists: jest.Mock<any, any, any>;
+    del: jest.Mock<any, any, any>;
+    hDel: jest.Mock<any, any, any>;
+    zRem: jest.Mock<any, any, any>;
+    keys: jest.Mock<any, any, any>;
+    lPush: jest.Mock<any, any, any>;
+    lRange: jest.Mock<any, any, any>;
+    quit: jest.Mock<any, any, any>;
+    flushall: jest.Mock<any, any, any>;
+};
 declare const mockBot: {
     sendMessage: jest.Mock<any, any, any>;
     deleteMessage: jest.Mock<any, any, any>;

@@ -35,12 +35,58 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getConnector = void 0;
+exports.getConnector = exports.disconnectWallet = exports.getConnectedWallet = void 0;
 const sdk_1 = __importDefault(require("@tonconnect/sdk"));
 const storage_1 = require("./storage");
 const process = __importStar(require("process"));
 const DEBUG = process.env.DEBUG_MODE === 'true';
 const connectors = new Map();
+/**
+ * Get connected wallet for a user
+ */
+function getConnectedWallet(userId) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            // In a real implementation, this would fetch from Redis or other database
+            // For this demo we'll simulate a connected wallet for some users
+            const storage = new storage_1.TonConnectStorage(userId);
+            const walletData = yield storage.getItem('connected_wallet');
+            if (!walletData) {
+                return null;
+            }
+            return JSON.parse(walletData);
+        }
+        catch (error) {
+            console.error(`Error getting connected wallet for user ${userId}:`, error);
+            return null;
+        }
+    });
+}
+exports.getConnectedWallet = getConnectedWallet;
+/**
+ * Disconnect wallet for a user
+ */
+function disconnectWallet(userId) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            // In a real implementation, this would update in Redis or other database
+            const storage = new storage_1.TonConnectStorage(userId);
+            yield storage.removeItem('connected_wallet');
+            // Also clean up any connector instances
+            if (connectors.has(userId)) {
+                const { timeout } = connectors.get(userId);
+                clearTimeout(timeout);
+                connectors.delete(userId);
+            }
+            return true;
+        }
+        catch (error) {
+            console.error(`Error disconnecting wallet for user ${userId}:`, error);
+            return false;
+        }
+    });
+}
+exports.disconnectWallet = disconnectWallet;
 /**
  * Retry function for handling network operations that might fail
  */
