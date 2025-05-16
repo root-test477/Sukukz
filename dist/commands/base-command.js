@@ -9,86 +9,57 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.BaseCommand = void 0;
+exports.WalletRequiredCommand = exports.AdminCommand = exports.BaseCommand = void 0;
 const bot_1 = require("../bot");
 const error_handler_1 = require("../error-handler");
 const utils_1 = require("../utils");
 /**
- * Base abstract class for commands
+ * Base class for all bot commands
  */
 class BaseCommand {
-    /**
-     * @param name The command name without the slash
-     * @param adminOnly Whether the command is admin-only
-     * @param description Brief description of what the command does
-     */
-    constructor(name, adminOnly, description) {
+    constructor(name, description) {
         this.name = name;
-        this.adminOnly = adminOnly;
         this.description = description;
     }
     /**
-     * Default implementation for getting the regex pattern
-     * Override this method if you need a custom pattern
+     * Create an error-handled version of this command's execute method
      */
-    getRegexPattern() {
-        return new RegExp(`\\/${this.name}(?:\\s+(.*))?`);
-    }
-    /**
-     * Get the command description
-     */
-    getDescription() {
-        return this.description;
-    }
-    /**
-     * Main execution method wrapped with error handling
-     */
-    execute(msg, match) {
-        var _a;
-        return __awaiter(this, void 0, void 0, function* () {
-            try {
-                // Check if admin-only and user is not an admin
-                if (this.adminOnly && !(0, utils_1.isAdmin)(msg.chat.id)) {
-                    yield this.handleUnauthorized(msg);
-                    return;
-                }
-                // Execute the command implementation
-                yield this.executeCommand(msg, match);
-            }
-            catch (error) {
-                // Handle any errors
-                error_handler_1.ErrorHandler.handleError({
-                    type: error_handler_1.ErrorType.COMMAND_HANDLER,
-                    message: error instanceof Error ? error.message : String(error),
-                    command: this.name,
-                    userId: (_a = msg.from) === null || _a === void 0 ? void 0 : _a.id,
-                    timestamp: Date.now(),
-                    stack: error instanceof Error ? error.stack : undefined
-                });
-                // Send error message to user
-                yield this.handleError(msg, error);
-            }
-        });
-    }
-    /**
-     * Handle unauthorized access (admin-only commands)
-     * Silently fails without sending any message to user
-     */
-    handleUnauthorized(_msg) {
-        return __awaiter(this, void 0, void 0, function* () {
-            // Silently ignore unauthorized access attempts
-            // No message is sent to avoid revealing admin commands exist
-            return;
-        });
-    }
-    /**
-     * Handle command execution errors
-     */
-    handleError(msg, _error) {
-        return __awaiter(this, void 0, void 0, function* () {
-            yield bot_1.bot.sendMessage(msg.chat.id, `⚠️ Sorry, an error occurred while processing the /${this.name} command. Please try again later.`);
-        });
+    get handler() {
+        return (0, error_handler_1.withErrorHandling)((msg, match) => __awaiter(this, void 0, void 0, function* () {
+            const args = match && match[1] ? match[1].split(' ').filter(arg => arg.length > 0) : [];
+            yield this.execute(msg, args);
+        }), this.name);
     }
 }
 exports.BaseCommand = BaseCommand;
+/**
+ * Admin-only command that checks for admin privileges before executing
+ */
+class AdminCommand extends BaseCommand {
+    execute(msg, args) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const chatId = msg.chat.id;
+            if (!(0, utils_1.isAdmin)(chatId)) {
+                yield bot_1.bot.sendMessage(chatId, 'This command is for admins only.');
+                return;
+            }
+            yield this.executeAdmin(msg, args);
+        });
+    }
+}
+exports.AdminCommand = AdminCommand;
+/**
+ * Wallet-required command that checks for connected wallet before executing
+ */
+class WalletRequiredCommand extends BaseCommand {
+    execute(msg, args) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const chatId = msg.chat.id;
+            // Check if user has connected wallet logic would go here
+            // For now, we'll implement this in the actual commands
+            yield this.executeWithWallet(msg, args);
+        });
+    }
+}
+exports.WalletRequiredCommand = WalletRequiredCommand;
 //# sourceMappingURL=base-command.js.map

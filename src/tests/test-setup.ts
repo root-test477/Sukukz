@@ -10,7 +10,25 @@ import * as dotenv from 'dotenv';
 dotenv.config({ path: '.env.test' });
 
 // Mock Redis client
-const mockRedisClient = createClient();
+const mockRedisClient = {
+    connect: jest.fn().mockResolvedValue(undefined),
+    isOpen: true,
+    hSet: jest.fn().mockResolvedValue(undefined),
+    hGetAll: jest.fn().mockResolvedValue({}),
+    zAdd: jest.fn().mockResolvedValue(1),
+    zRange: jest.fn().mockResolvedValue([]),
+    get: jest.fn().mockResolvedValue(null),
+    set: jest.fn().mockResolvedValue('OK'),
+    exists: jest.fn().mockResolvedValue(0),
+    del: jest.fn().mockResolvedValue(1),
+    hDel: jest.fn().mockResolvedValue(1),
+    zRem: jest.fn().mockResolvedValue(1),
+    keys: jest.fn().mockResolvedValue([]),
+    lPush: jest.fn().mockResolvedValue(1),
+    lRange: jest.fn().mockResolvedValue([]),
+    quit: jest.fn().mockResolvedValue(undefined),
+    flushall: jest.fn().mockResolvedValue('OK')
+};
 
 // Mock the Redis import in storage.ts
 jest.mock('redis', () => {
@@ -21,29 +39,25 @@ jest.mock('redis', () => {
 
 // Mock Telegram Bot
 const mockBot = {
-    sendMessage: jest.fn(),
-    deleteMessage: jest.fn(),
-    editMessageText: jest.fn(),
+    sendMessage: jest.fn().mockResolvedValue({}),
+    deleteMessage: jest.fn().mockResolvedValue(true),
+    editMessageText: jest.fn().mockResolvedValue({}),
     onText: jest.fn(),
     on: jest.fn(),
-    sendPhoto: jest.fn(),
-    setMyCommands: jest.fn()
+    sendPhoto: jest.fn().mockResolvedValue({}),
+    setMyCommands: jest.fn().mockResolvedValue(true)
 };
 
 // Mock the bot import in other modules
 jest.mock('../bot', () => {
-    return {
-        bot: mockBot
-    };
+    return { bot: mockBot };
 });
 
 /**
  * Reset all mocks between tests
  */
-export function resetMocks() {
+export function resetMocks(): void {
     jest.clearAllMocks();
-    
-    // Clear Redis mock data
     mockRedisClient.flushall();
 }
 

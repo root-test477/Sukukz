@@ -268,14 +268,14 @@ export const handleScheduleCommand = withErrorHandling(
         }
         
         // Parse scheduled time
-        const timeArg = args[0];
+        const timeArg = args[0] || '';
         let scheduledTime: Date;
         
         if (timeArg.startsWith('+')) {
             // Relative time
             const now = new Date();
-            const amount = parseInt(timeArg.substring(1, timeArg.length - 1));
-            const unit = timeArg.charAt(timeArg.length - 1).toLowerCase();
+            const amount = parseInt(timeArg.substring(1, timeArg.length - 1) || '0');
+            const unit = timeArg.length > 0 ? timeArg.charAt(timeArg.length - 1).toLowerCase() : 'm';
             
             switch (unit) {
                 case 'm': // minutes
@@ -311,7 +311,7 @@ export const handleScheduleCommand = withErrorHandling(
         }
         
         // Parse target users
-        const targetArg = args[1];
+        const targetArg = args[1] || 'all';
         let targetUsers: number[] | 'all' | 'connected' | 'active';
         
         if (['all', 'connected', 'active'].includes(targetArg)) {
@@ -394,7 +394,7 @@ export const handleCancelScheduleCommand = withErrorHandling(
             return;
         }
         
-        const messageId = args[0];
+        const messageId = args[0] || '';
         
         // Cancel the message
         const success = await cancelScheduledMessage(messageId);

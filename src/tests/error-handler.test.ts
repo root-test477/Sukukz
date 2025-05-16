@@ -46,7 +46,7 @@ describe('Error Handler', () => {
     test('handleErrorsCommand should fetch and display error reports', async () => {
         // Set up mock Redis response for error reports
         mockRedisClient.zRange.mockResolvedValue(['error1', 'error2']);
-        mockRedisClient.hGetAll.mockImplementation((key) => {
+        mockRedisClient.hGetAll.mockImplementation((key: string) => {
             if (key === 'error:error1') {
                 return Promise.resolve({
                     timestamp: new Date().toISOString(),

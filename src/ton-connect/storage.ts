@@ -25,7 +25,7 @@ export async function getRedisClient(): Promise<RedisClientType> {
     if (!client.isOpen) {
         await client.connect();
     }
-    return client;
+    return client as RedisClientType;
 }
 
 // In-memory wallet cache for better performance

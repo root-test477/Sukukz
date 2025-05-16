@@ -102,11 +102,16 @@ async function showTutorialStep(chatId: number, step: number): Promise<void> {
     }
     
     const tutorialStep = TUTORIAL_STEPS[step];
+    if (!tutorialStep) {
+        console.error(`Tutorial step ${step} not found`);
+        await bot.sendMessage(chatId, 'Error loading tutorial step. Please try again later.');
+        return;
+    }
     
     // Create keyboard with navigation buttons
     const keyboard = {
         inline_keyboard: [
-            [{ text: tutorialStep.button, callback_data: JSON.stringify({ method: 'tutorial_next', data: '' }) }],
+            [{ text: tutorialStep.button || 'Next', callback_data: JSON.stringify({ method: 'tutorial_next', data: '' }) }],
             [{ text: 'Skip Tutorial', callback_data: JSON.stringify({ method: 'tutorial_skip', data: '' }) }]
         ]
     };
@@ -121,7 +126,7 @@ async function showTutorialStep(chatId: number, step: number): Promise<void> {
     
     await bot.sendMessage(
         chatId,
-        `*${tutorialStep.title}*\n\n${tutorialStep.content}`,
+        `*${tutorialStep.title || 'Tutorial Step'}*\n\n${tutorialStep.content || 'No content available for this step.'}`,
         { 
             parse_mode: 'Markdown',
             reply_markup: keyboard 

@@ -3,6 +3,21 @@ import { bot } from './bot';
 import { RedisClientType } from 'redis';
 import { getRedisClient, saveErrorReport } from './ton-connect/storage';
 
+// Error type enum for categorizing errors
+export enum ErrorType {
+    COMMAND_ERROR = 'command_error',
+    CONNECTION_ERROR = 'connection_error',
+    STORAGE_ERROR = 'storage_error',
+    VALIDATION_ERROR = 'validation_error',
+    UNKNOWN_ERROR = 'unknown_error'
+}
+
+// Error handler interface that other components can implement
+export interface ErrorHandler {
+    handleError(error: Error, context?: any): Promise<void>;
+    logError(error: Error, context?: any): void;
+}
+
 interface ErrorReport {
     id: string;
     timestamp: string;
@@ -69,7 +84,7 @@ export function setupGlobalErrorHandlers() {
         // Log to a monitoring service or file if needed
     });
 
-    process.on('unhandledRejection', (reason, promise) => {
+    process.on('unhandledRejection', (reason) => {
         console.error('UNHANDLED REJECTION:', reason);
         // Log to a monitoring service or file if needed
     });
@@ -89,7 +104,8 @@ function generateErrorId(): string {
 export async function handleErrorsCommand(msg: TelegramBot.Message): Promise<void> {
     const chatId = msg.chat.id;
     // Safely extract limit parameter with a default value
-    const limitStr = msg.text?.split(' ')[1] || '10';
+    const messageText = msg.text || '/errors 10';
+    const limitStr = messageText.split(' ')[1] || '10';
     const limit = parseInt(limitStr, 10);
     
     try {
@@ -107,16 +123,16 @@ export async function handleErrorsCommand(msg: TelegramBot.Message): Promise<voi
         const errorReports: ErrorReport[] = [];
         
         for (const errorId of recentErrorIds) {
-            const errorData = await redisClient.hGetAll(`error:${errorId}`);
+            const errorData = await redisClient.hGetAll(`error:${errorId || ''}`);
             if (Object.keys(errorData).length > 0) {
                 errorReports.push({
                     id: errorId,
                     timestamp: errorData.timestamp || '',
                     commandName: errorData.commandName || '',
-                    userId: parseInt(errorData.userId) || 0,
+                    userId: parseInt(errorData.userId || '0') || 0,
                     userMessage: errorData.userMessage || '',
                     error: errorData.error || '',
-                    stack: errorData.stack
+                    stack: errorData.stack || ''
                 });
             }
         }

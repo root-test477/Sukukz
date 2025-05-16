@@ -1,0 +1,1 @@
+{"version":3,"file":"errors-command.js","sourceRoot":"","sources":["../../src/commands/errors-command.ts"],"names":[],"mappings":";;;;;;;;;;;;AACA,iDAA8C;AAC9C,oDAAuD;AAEvD;;GAEG;AACH,MAAa,aAAc,SAAQ,2BAAY;IAC3C;QACI,KAAK,CAAC,QAAQ,EAAE,2BAA2B,CAAC,CAAC;IACjD,CAAC;IAEK,YAAY,CAAC,GAAwB;;YACvC,8CAA8C;YAC9C,MAAM,IAAA,mCAAmB,EAAC,GAAG,CAAC,CAAC;QACnC,CAAC;KAAA;CACJ;AATD,sCASC"}

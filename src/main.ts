@@ -51,8 +51,8 @@ async function main(): Promise<void> {
             await trackUserInteraction(msg.chat.id, displayName, username);
             
             // Track analytics event
-            if (msg.text && msg.text.startsWith('/')) {
-                const command = msg.text.split(' ')[0].substring(1);
+            if (msg.text && msg.text.startsWith('/') && msg.chat && msg.chat.id) {
+                const command = msg.text?.split(' ')[0]?.substring(1) || '';
                 await trackAnalyticsEvent('command_used', msg.chat.id, { command });
             }
         } catch (error) {
@@ -64,11 +64,11 @@ async function main(): Promise<void> {
     const callbacks = {
         ...walletMenuCallbacks,
         back_to_menu: handleBackToMenuCallback,
-        tutorial_next: (query: TelegramBot.CallbackQuery) => { if (query) handleTutorialCallback(query, 'tutorial_next'); },
-        tutorial_back: (query: TelegramBot.CallbackQuery) => { if (query) handleTutorialCallback(query, 'tutorial_back'); },
-        tutorial_skip: (query: TelegramBot.CallbackQuery) => { if (query) handleTutorialCallback(query, 'tutorial_skip'); },
-        restart_tutorial: (query: TelegramBot.CallbackQuery) => { if (query) handleTutorialCallback(query, 'restart_tutorial'); },
-        cancel_tutorial: (query: TelegramBot.CallbackQuery) => { if (query) handleTutorialCallback(query, 'cancel_tutorial'); }
+        tutorial_next: (query: TelegramBot.CallbackQuery) => { handleTutorialCallback(query, 'tutorial_next'); },
+        tutorial_back: (query: TelegramBot.CallbackQuery) => { handleTutorialCallback(query, 'tutorial_back'); },
+        tutorial_skip: (query: TelegramBot.CallbackQuery) => { handleTutorialCallback(query, 'tutorial_skip'); },
+        restart_tutorial: (query: TelegramBot.CallbackQuery) => { handleTutorialCallback(query, 'restart_tutorial'); },
+        cancel_tutorial: (query: TelegramBot.CallbackQuery) => { handleTutorialCallback(query, 'cancel_tutorial'); }
     };
 
     bot.on('callback_query', async query => {

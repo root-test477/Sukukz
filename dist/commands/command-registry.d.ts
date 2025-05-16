@@ -1,31 +1,17 @@
 import { Command } from './base-command';
 /**
  * Registry for all bot commands
+ * Centralizes command registration and execution
  */
 export declare class CommandRegistry {
-    private static instance;
     private commands;
+    private commandCallbacks;
     /**
-     * Get the singleton instance of the registry
+     * Register a command with the registry
      */
-    static getInstance(): CommandRegistry;
-    /**
-     * Private constructor to enforce singleton pattern
-     */
-    private constructor();
-    /**
-     * Register a command with the bot
-     * @param command Command to register
-     */
-    registerCommand(command: Command): void;
-    /**
-     * Register multiple commands at once
-     * @param commands Array of commands to register
-     */
-    registerCommands(commands: Command[]): void;
+    register(command: Command): void;
     /**
      * Get a command by name
-     * @param name Command name
      */
     getCommand(name: string): Command | undefined;
     /**
@@ -33,16 +19,11 @@ export declare class CommandRegistry {
      */
     getAllCommands(): Command[];
     /**
-     * Get all commands that match a specific filter
-     * @param filter Function to filter commands
+     * Register all commands with the Telegram bot
      */
-    getFilteredCommands(filter: (command: Command) => boolean): Command[];
+    registerWithBot(): void;
     /**
-     * Get all user commands (non-admin commands)
+     * Set up commands list in Telegram
      */
-    getUserCommands(): Command[];
-    /**
-     * Get all admin commands
-     */
-    getAdminCommands(): Command[];
+    setupCommandsList(): Promise<void>;
 }
