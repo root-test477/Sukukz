@@ -1,6 +1,7 @@
 import TonConnect from '@tonconnect/sdk';
 import { TonConnectStorage } from './storage';
 import * as process from 'process';
+import { cacheWalletConnection, getCachedWalletConnection, invalidateWalletConnectionCache } from '../wallet-cache';
 
 const DEBUG = process.env.DEBUG_MODE === 'true';
 
@@ -11,60 +12,6 @@ type StoredConnectorData = {
 };
 
 const connectors = new Map<number, StoredConnectorData>();
-
-/**
- * Interface for connected wallet information
- */
-export interface ConnectedWallet {
-    address: string;
-    walletName: string;
-    connectedAt: number;
-    lastActive: number;
-}
-
-/**
- * Get connected wallet for a user
- */
-export async function getConnectedWallet(userId: number): Promise<ConnectedWallet | null> {
-    try {
-        // In a real implementation, this would fetch from Redis or other database
-        // For this demo we'll simulate a connected wallet for some users
-        const storage = new TonConnectStorage(userId);
-        const walletData = await storage.getItem('connected_wallet');
-        
-        if (!walletData) {
-            return null;
-        }
-        
-        return JSON.parse(walletData) as ConnectedWallet;
-    } catch (error) {
-        console.error(`Error getting connected wallet for user ${userId}:`, error);
-        return null;
-    }
-}
-
-/**
- * Disconnect wallet for a user
- */
-export async function disconnectWallet(userId: number): Promise<boolean> {
-    try {
-        // In a real implementation, this would update in Redis or other database
-        const storage = new TonConnectStorage(userId);
-        await storage.removeItem('connected_wallet');
-        
-        // Also clean up any connector instances
-        if (connectors.has(userId)) {
-            const { timeout } = connectors.get(userId)!;
-            clearTimeout(timeout);
-            connectors.delete(userId);
-        }
-        
-        return true;
-    } catch (error) {
-        console.error(`Error disconnecting wallet for user ${userId}:`, error);
-        return false;
-    }
-}
 
 /**
  * Retry function for handling network operations that might fail
@@ -90,11 +37,22 @@ export function getConnector(
     if (DEBUG) {
         console.log(`[CONNECTOR] getConnector for chatId: ${chatId}`);
     }
+    
+    // Check cache first if caching is enabled
+    const cachedConnector = getCachedWalletConnection(chatId);
+    if (cachedConnector) {
+        if (DEBUG) {
+            console.log(`[CONNECTOR] Using cached connector for chatId: ${chatId}`);
+        }
+        return cachedConnector;
+    }
+    
     let storedItem: StoredConnectorData;
     if (connectors.has(chatId)) {
         storedItem = connectors.get(chatId)!;
         clearTimeout(storedItem.timeout);
-    } else {
+    }
+    else {
         if (DEBUG) {
             console.log(`[CONNECTOR] Creating new connector for chatId: ${chatId}`);
         }
@@ -139,6 +97,9 @@ export function getConnector(
         }
         storedItem.onConnectorExpired.forEach(cb => cb(storedItem.connector));
         connectors.delete(chatId);
+        
+        // Also invalidate the cache
+        invalidateWalletConnectionCache(chatId);
     }, TTL);
 
     connectors.set(chatId, storedItem);
@@ -152,6 +113,11 @@ export function getConnector(
         // Log initial connection state
         console.log(`[CONNECTOR] Initial connection state for chatId: ${chatId}:`, 
             storedItem.connector.connected ? 'Connected' : 'Disconnected');
+    }
+
+    // If connected, add to cache
+    if (storedItem.connector.connected) {
+        cacheWalletConnection(chatId, storedItem.connector);
     }
 
     if (DEBUG) {

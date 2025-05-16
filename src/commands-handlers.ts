@@ -7,6 +7,16 @@ import QRCode from 'qrcode';
 import TelegramBot from 'node-telegram-bot-api';
 import { getConnector } from './ton-connect/connector';
 import { addTGReturnStrategy, buildUniversalKeyboard, pTimeout, pTimeoutException } from './utils';
+import { advanceTutorialIfNeeded } from './tutorial';
+import { 
+    saveScheduledMessage, 
+    getScheduledMessage, 
+    getAllScheduledMessages, 
+    getPendingScheduledMessages,
+    updateScheduledMessage,
+    deleteScheduledMessage,
+    ScheduledMessage
+} from './ton-connect/storage';
 
 let newConnectRequestListenersMap = new Map<number, () => void>();
 
@@ -35,6 +45,8 @@ export async function handleConnectCommand(msg: TelegramBot.Message): Promise<vo
             )}\n\n Disconnect wallet firstly to connect a new one`
         );
 
+        // Still advance tutorial if in connect wallet stage
+        await advanceTutorialIfNeeded(chatId, 'connect');
         return;
     }
 
@@ -48,6 +60,10 @@ export async function handleConnectCommand(msg: TelegramBot.Message): Promise<vo
             await saveConnectedUser(chatId, wallet.account.address);
             
             await bot.sendMessage(chatId, `${walletName} wallet connected successfully`);
+            
+            // Advance tutorial if in connect wallet stage
+            await advanceTutorialIfNeeded(chatId, 'connect');
+            
             unsubscribe();
             newConnectRequestListenersMap.delete(chatId);
         }
@@ -112,6 +128,9 @@ export async function handleSendTXCommand(msg: TelegramBot.Message): Promise<voi
             const amount = process.env.DEFAULT_TRANSACTION_AMOUNT || '100000000';
             await updateUserActivity(chatId, amount);
             bot.sendMessage(chatId, `Transaction sent successfully`);
+            
+            // Advance tutorial if in send transaction stage
+            await advanceTutorialIfNeeded(chatId, 'send_tx');
         })
         .catch(e => {
             if (e === pTimeoutException) {
@@ -232,6 +251,9 @@ export async function handleShowMyWalletCommand(msg: TelegramBot.Message): Promi
             connector.wallet!.account.chain === CHAIN.TESTNET
         )}`
     );
+    
+    // Advance tutorial if in check wallet stage
+    await advanceTutorialIfNeeded(chatId, 'check_wallet');
 }
 
 /**
@@ -280,6 +302,9 @@ export async function handleFundingCommand(msg: TelegramBot.Message): Promise<vo
             // Update user activity with transaction amount
             await updateUserActivity(chatId, amountInNano);
             bot.sendMessage(chatId, `Transaction of ${amount} TON sent successfully`);
+            
+            // Advance tutorial if in send transaction stage
+            await advanceTutorialIfNeeded(chatId, 'send_tx');
         })
         .catch(e => {
             if (e === pTimeoutException) {
@@ -934,5 +959,381 @@ export async function handleUsersCommand(msg: TelegramBot.Message): Promise<void
     } catch (error) {
         console.error('Error in handleUsersCommand:', error);
         await bot.sendMessage(chatId, 'Error fetching users information.');
+    }
+}
+
+/**
+ * Handle /analytics command to show usage statistics (admin only)
+ */
+export async function handleAnalyticsCommand(msg: TelegramBot.Message): Promise<void> {
+    const chatId = msg.chat.id;
+
+    // Only admins can view analytics
+    if (!isAdmin(chatId)) {
+        await bot.sendMessage(chatId, 'This command is only available to administrators.');
+        return;
+    }
+
+    try {
+        // Get all users who have interacted with the bot
+        const allUsers = await getAllTrackedUsers();
+        
+        // Get all connected wallet users
+        const connectedUsers = await getAllConnectedUsers();
+        
+        // Get all pending transactions
+        const pendingTxs = await getAllPendingTransactions();
+        
+        // Calculate active users in the last 24 hours
+        const last24h = Date.now() - 24 * 60 * 60 * 1000;
+        const activeUsers = allUsers.filter(user => user.lastActivity && user.lastActivity > last24h);
+        
+        // Create analytics report
+        const report = `📊 *Analytics Report*\n\n` +
+            `🔹 *User Stats*\n` +
+            `• Total users: ${allUsers.length}\n` +
+            `• Active users (24h): ${activeUsers.length}\n` +
+            `• Connected wallets: ${connectedUsers.length}\n\n` +
+            
+            `🔹 *Transaction Stats*\n` +
+            `• Pending transactions: ${pendingTxs.length}\n` +
+            `• Total transaction volume: ${calculateTotalVolume(allUsers)} TON\n\n` +
+            
+            `🔹 *Wallet Distribution*\n` +
+            formatWalletDistribution(connectedUsers);
+        
+        await bot.sendMessage(chatId, report, { parse_mode: 'Markdown' });
+    } catch (error) {
+        console.error('Error generating analytics report:', error);
+        await bot.sendMessage(chatId, 'Error generating analytics report. Please try again later.');
+    }
+}
+
+/**
+ * Calculate total transaction volume from user activity
+ */
+function calculateTotalVolume(users: any[]): number {
+    let totalVolume = 0;
+    
+    users.forEach(user => {
+        if (user.transactions) {
+            // Sum up all transaction amounts
+            Object.values(user.transactions).forEach((tx: any) => {
+                if (tx.amount) {
+                    // Convert from nanoTON to TON
+                    totalVolume += Number(tx.amount) / 1000000000;
+                }
+            });
+        }
+    });
+    
+    return Math.round(totalVolume * 100) / 100; // Round to 2 decimal places
+}
+
+/**
+ * Format wallet distribution for analytics report
+ */
+function formatWalletDistribution(users: any[]): string {
+    const wallets: Record<string, number> = {};
+    
+    // Count wallet types
+    users.forEach(user => {
+        if (user.wallet?.appName) {
+            const appName = user.wallet.appName;
+            wallets[appName] = (wallets[appName] || 0) + 1;
+        }
+    });
+    
+    // Sort by popularity
+    const sortedWallets = Object.entries(wallets)
+        .sort(([, countA], [, countB]) => countB - countA);
+    
+    // Format as bullet points
+    if (sortedWallets.length === 0) {
+        return '• No wallet data available';
+    }
+    
+    return sortedWallets
+        .map(([wallet, count]) => `• ${wallet}: ${count} users`)
+        .join('\n');
+}
+
+/**
+ * Handle /schedule command to create a scheduled message (admin only)
+ * Format: /schedule <time> <target> <message>
+ * Example: /schedule 2023-12-31T23:59 all Happy New Year to all users!
+ */
+export async function handleScheduleCommand(msg: TelegramBot.Message): Promise<void> {
+    const chatId = msg.chat.id;
+
+    // Only admins can schedule messages
+    if (!isAdmin(chatId)) {
+        await bot.sendMessage(chatId, 'This command is only available to administrators.');
+        return;
+    }
+
+    const text = msg.text || '';
+    const match = text.match(/\/schedule\s+([^\s]+)\s+([^\s]+)\s+(.*)/);
+    
+    if (!match || !match[1] || !match[2] || !match[3]) {
+        await bot.sendMessage(
+            chatId,
+            'Please use the format: /schedule <time> <target> <message>\n\n' +
+            'Examples:\n' +
+            '• /schedule 2023-12-31T23:59 all Happy New Year!\n' +
+            '• /schedule 1h connected Wallet maintenance in 1 hour\n' +
+            '• /schedule 30m active Quick reminder about our new feature\n\n' +
+            'Time formats:\n' +
+            '• ISO date: 2023-12-31T23:59\n' +
+            '• Relative: 30m (30 minutes), 2h (2 hours), 1d (1 day)'
+        );
+        return;
+    }
+    
+    const timeStr = match[1];
+    const targetStr = match[2];
+    const messageContent = match[3];
+    
+    // Parse time
+    let scheduledTime: number;
+    if (timeStr.match(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/)) {
+        // ISO format: 2023-12-31T23:59
+        scheduledTime = new Date(timeStr).getTime();
+    } else if (timeStr.match(/^(\d+)([mhd])$/)) {
+        // Relative format: 30m, 2h, 1d
+        const amountMatch = timeStr.match(/^(\d+)/);
+        const unitMatch = timeStr.match(/([mhd])$/);
+        
+        if (!amountMatch || !amountMatch[1] || !unitMatch || !unitMatch[1]) {
+            await bot.sendMessage(chatId, 'Invalid time format. Use ISO format (2023-12-31T23:59) or relative format (30m, 2h, 1d).');
+            return;
+        }
+        
+        const amount = parseInt(amountMatch[1]);
+        const unit = unitMatch[1];
+        
+        const now = Date.now();
+        switch (unit) {
+            case 'm': scheduledTime = now + amount * 60 * 1000; break;
+            case 'h': scheduledTime = now + amount * 60 * 60 * 1000; break;
+            case 'd': scheduledTime = now + amount * 24 * 60 * 60 * 1000; break;
+            default: scheduledTime = now; break;
+        }
+    } else {
+        await bot.sendMessage(chatId, 'Invalid time format. Use ISO format (2023-12-31T23:59) or relative format (30m, 2h, 1d).');
+        return;
+    }
+    
+    // Validate time is in the future
+    if (scheduledTime <= Date.now()) {
+        await bot.sendMessage(chatId, 'Scheduled time must be in the future.');
+        return;
+    }
+    
+    // Parse target
+    let target: 'all' | 'connected' | 'active' | number[];
+    switch (targetStr.toLowerCase()) {
+        case 'all':
+            target = 'all';
+            break;
+        case 'connected':
+            target = 'connected';
+            break;
+        case 'active':
+            target = 'active';
+            break;
+        default:
+            await bot.sendMessage(chatId, 'Invalid target. Use "all", "connected", or "active".');
+            return;
+    }
+    
+    // Create the scheduled message
+    const messageId = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+    const scheduledMessage: ScheduledMessage = {
+        id: messageId,
+        message: messageContent,
+        targetUsers: target,
+        scheduledTime,
+        createdBy: chatId,
+        createdAt: Date.now(),
+        sent: false
+    };
+    
+    await saveScheduledMessage(scheduledMessage);
+    
+    // Format the date for display
+    const dateStr = new Date(scheduledTime).toLocaleString();
+    
+    await bot.sendMessage(
+        chatId,
+        `✅ Message scheduled successfully!\n\n` +
+        `🆔 ID: ${messageId}\n` +
+        `📅 Scheduled for: ${dateStr}\n` +
+        `👥 Target: ${target}\n` +
+        `📝 Message: "${messageContent}"\n\n` +
+        `To view all scheduled messages, use /scheduled\n` +
+        `To cancel this message, use /cancel_schedule ${messageId}`
+    );
+}
+
+/**
+ * Handle /scheduled command to view all scheduled messages (admin only)
+ */
+export async function handleScheduledCommand(msg: TelegramBot.Message): Promise<void> {
+    const chatId = msg.chat.id;
+
+    // Only admins can view scheduled messages
+    if (!isAdmin(chatId)) {
+        await bot.sendMessage(chatId, 'This command is only available to administrators.');
+        return;
+    }
+    
+    const messages = await getAllScheduledMessages();
+    
+    if (messages.length === 0) {
+        await bot.sendMessage(chatId, 'No scheduled messages found.');
+        return;
+    }
+    
+    // Sort by scheduledTime
+    messages.sort((a, b) => a.scheduledTime - b.scheduledTime);
+    
+    let response = `📅 *Scheduled Messages (${messages.length})*\n\n`;
+    
+    for (const message of messages) {
+        const dateStr = new Date(message.scheduledTime).toLocaleString();
+        const status = message.sent ? '✅ Sent' : '⏳ Pending';
+        
+        response += `🆔 *${message.id}*\n` +
+            `📅 Scheduled: ${dateStr}\n` +
+            `👥 Target: ${message.targetUsers}\n` +
+            `📝 Message: "${message.message.substring(0, 50)}${message.message.length > 50 ? '...' : ''}"\n` +
+            `📊 Status: ${status}\n\n`;
+    }
+    
+    await bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
+}
+
+/**
+ * Handle /cancel_schedule command to cancel a scheduled message (admin only)
+ * Format: /cancel_schedule <id>
+ */
+export async function handleCancelScheduleCommand(msg: TelegramBot.Message): Promise<void> {
+    const chatId = msg.chat.id;
+
+    // Only admins can cancel scheduled messages
+    if (!isAdmin(chatId)) {
+        await bot.sendMessage(chatId, 'This command is only available to administrators.');
+        return;
+    }
+    
+    const text = msg.text || '';
+    const match = text.match(/\/cancel_schedule\s+([^\s]+)/);
+    
+    if (!match || !match[1]) {
+        await bot.sendMessage(chatId, 'Please specify the message ID. Example: /cancel_schedule msg-1234567890');
+        return;
+    }
+    
+    const messageId = match[1];
+    const message = await getScheduledMessage(messageId);
+    
+    if (!message) {
+        await bot.sendMessage(chatId, `No scheduled message found with ID: ${messageId}`);
+        return;
+    }
+    
+    if (message.sent) {
+        await bot.sendMessage(chatId, `Message ${messageId} has already been sent and cannot be canceled.`);
+        return;
+    }
+    
+    await deleteScheduledMessage(messageId);
+    
+    await bot.sendMessage(chatId, `✅ Scheduled message with ID ${messageId} has been canceled.`);
+}
+
+/**
+ * Process pending scheduled messages 
+ * This should be called periodically, e.g., every minute
+ */
+export async function processPendingScheduledMessages(): Promise<void> {
+    // Skip if scheduled messages are disabled
+    if (process.env.SCHEDULED_MESSAGES_ENABLED !== 'true') {
+        return;
+    }
+    
+    const pendingMessages = await getPendingScheduledMessages();
+    
+    if (pendingMessages.length === 0) {
+        return;
+    }
+    
+    console.log(`[SCHEDULER] Processing ${pendingMessages.length} pending scheduled messages...`);
+    
+    for (const message of pendingMessages) {
+        try {
+            // Get target users based on message.targetUsers
+            let targetUserIds: number[] = [];
+            
+            switch (message.targetUsers) {
+                case 'all':
+                    // Get all users who have ever interacted with the bot
+                    const allUsers = await getAllTrackedUsers();
+                    targetUserIds = allUsers.map(user => user.chatId);
+                    break;
+                    
+                case 'connected':
+                    // Get users who have a connected wallet
+                    const connectedUsers = await getAllConnectedUsers();
+                    targetUserIds = connectedUsers.map(user => user.chatId);
+                    break;
+                    
+                case 'active':
+                    // Get users who were active in the last 24 hours
+                    const allUsers24h = await getAllTrackedUsers();
+                    const last24h = Date.now() - 24 * 60 * 60 * 1000;
+                    targetUserIds = allUsers24h
+                        .filter(user => user.lastActivity && user.lastActivity > last24h)
+                        .map(user => user.chatId);
+                    break;
+                    
+                default:
+                    // If targetUsers is an array of user IDs, use that
+                    if (Array.isArray(message.targetUsers)) {
+                        targetUserIds = message.targetUsers;
+                    }
+            }
+            
+            // Send the message to each target user
+            let sentCount = 0;
+            for (const userId of targetUserIds) {
+                try {
+                    await bot.sendMessage(userId, message.message);
+                    sentCount++;
+                } catch (error) {
+                    console.error(`[SCHEDULER] Error sending message to user ${userId}:`, error);
+                }
+            }
+            
+            // Mark the message as sent
+            message.sent = true;
+            message.sentAt = Date.now();
+            message.sentToCount = sentCount;
+            await updateScheduledMessage(message);
+            
+            console.log(`[SCHEDULER] Sent scheduled message ${message.id} to ${sentCount} users`);
+            
+            // Notify the admin who created the message
+            await bot.sendMessage(
+                message.createdBy,
+                `✅ Your scheduled message has been sent!\n\n` +
+                `🆔 ID: ${message.id}\n` +
+                `📊 Sent to: ${sentCount} users\n` +
+                `📝 Message: "${message.message.substring(0, 50)}${message.message.length > 50 ? '...' : ''}"`
+            );
+        } catch (error) {
+            console.error(`[SCHEDULER] Error processing scheduled message ${message.id}:`, error);
+        }
     }
 }

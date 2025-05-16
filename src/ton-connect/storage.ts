@@ -1,5 +1,5 @@
 import { IStorage } from '@tonconnect/sdk';
-import { createClient, RedisClientType } from 'redis';
+import { createClient } from 'redis';
 import * as process from 'process';
 
 const DEBUG = process.env.DEBUG_MODE === 'true';
@@ -15,59 +15,6 @@ client.on('error', err => console.log('Redis Client Error', err));
 
 export async function initRedisClient(): Promise<void> {
     await client.connect();
-}
-
-/**
- * Get the Redis client instance
- * For use in other modules that need direct access
- */
-export async function getRedisClient(): Promise<RedisClientType> {
-    if (!client.isOpen) {
-        await client.connect();
-    }
-    return client as RedisClientType;
-}
-
-// In-memory wallet cache for better performance
-const walletCache: Map<number, {data: any, timestamp: number}> = new Map();
-const CACHE_TTL = 60 * 1000; // 1 minute TTL
-
-/**
- * Cache-enabled wallet data retrieval
- */
-export async function getCachedWalletData(chatId: number): Promise<any | null> {
-    // First check the in-memory cache
-    const cached = walletCache.get(chatId);
-    
-    if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
-        if (DEBUG) console.log(`[CACHE] Hit for wallet data: ${chatId}`);
-        return cached.data;
-    }
-    
-    // If not in cache or expired, get from Redis
-    const key = `${chatId}wallet_info`;
-    const data = await client.get(key);
-    
-    if (data) {
-        // Update cache
-        const parsed = JSON.parse(data);
-        walletCache.set(chatId, {
-            data: parsed,
-            timestamp: Date.now()
-        });
-        if (DEBUG) console.log(`[CACHE] Updated for wallet data: ${chatId}`);
-        return parsed;
-    }
-    
-    return null;
-}
-
-/**
- * Update cache when wallet data changes
- */
-export function invalidateWalletCache(chatId: number): void {
-    walletCache.delete(chatId);
-    if (DEBUG) console.log(`[CACHE] Invalidated for wallet data: ${chatId}`);
 }
 // User data structure for tracking connected users
 export interface UserData {
@@ -139,8 +86,6 @@ export async function trackUserInteraction(chatId: number, displayName?: string,
  * Save a user who has connected a wallet
  */
 export async function saveConnectedUser(chatId: number, walletAddress: string): Promise<void> {
-    // Invalidate cache for this user
-    invalidateWalletCache(chatId);
     const now = Date.now();
     
     // Get existing user data if any
@@ -188,8 +133,6 @@ export async function updateUserActivity(chatId: number, transactionAmount?: str
 }
 
 export async function removeConnectedUser(chatId: number): Promise<void> {
-    // Invalidate cache for this user
-    invalidateWalletCache(chatId);
     await client.hDel('connected_users', chatId.toString());
     if (DEBUG) {
         console.log(`[STORAGE] Removed connected user: ${chatId}`);
@@ -227,13 +170,10 @@ export interface TransactionSubmission {
     notes?: string;     // Optional notes from admin
 }
 
-export async function saveTransactionSubmission(chatId: number, transactionId: string, amount: string = '0', description: string = ''): Promise<void> {
+export async function saveTransactionSubmission(chatId: number, transactionId: string): Promise<void> {
     const submission: TransactionSubmission = {
         id: transactionId,
         userId: chatId,
-        txId: transactionId,
-        amount: amount,
-        description: description,
         timestamp: Date.now(),
         status: 'pending'
     };
@@ -271,107 +211,11 @@ export async function getTransactionSubmission(transactionId: string): Promise<T
     return data ? JSON.parse(data) : null;
 }
 
-/**
- * TransactionSubmission interface for payment submissions
- */
-export interface TransactionSubmission {
-    id: string;
-    userId: number;
-    txId: string;
-    amount: string;
-    description: string;
-    status: 'pending' | 'approved' | 'rejected';
-    timestamp: number;
-    reviewedBy?: number;
-    reviewedAt?: number;
-    reviewNote?: string;
-}
-
-/**
- * Save a new transaction submission to Redis
- */
-export async function saveTransaction(transaction: TransactionSubmission): Promise<void> {
-    await client.hSet(`transaction:${transaction.id}`, {
-        userId: transaction.userId.toString(),
-        txId: transaction.txId,
-        amount: transaction.amount,
-        description: transaction.description,
-        status: transaction.status,
-        timestamp: transaction.timestamp.toString()
-    });
-    
-    // Also add to user's transaction list
-    await client.sAdd(`user:${transaction.userId}:transactions`, transaction.id);
-    
-    // Add to global transaction list by status
-    await client.sAdd(`transactions:${transaction.status}`, transaction.id);
-}
-
-/**
- * Get a transaction by ID
- */
-export async function getTransaction(id: string): Promise<TransactionSubmission | null> {
-    const transactionData = await client.hGetAll(`transaction:${id}`);
-    
-    if (!transactionData || Object.keys(transactionData).length === 0) {
-        return null;
-    }
-    
-    return {
-        id,
-        userId: parseInt(transactionData.userId || '0'),
-        txId: transactionData.txId || id, // Use id as fallback if txId is undefined
-        amount: transactionData.amount || '0',
-        description: transactionData.description || '',
-        status: (transactionData.status || 'pending') as 'pending' | 'approved' | 'rejected',
-        timestamp: parseInt(transactionData.timestamp || '0'),
-        reviewedBy: transactionData.reviewedBy ? parseInt(transactionData.reviewedBy) : undefined,
-        reviewedAt: transactionData.reviewedAt ? parseInt(transactionData.reviewedAt) : undefined,
-        reviewNote: transactionData.reviewNote
-    };
-}
-
-/**
- * Update an existing transaction
- */
-export async function updateTransaction(transaction: TransactionSubmission): Promise<void> {
-    // First remove from status-specific list
-    const tx = await getTransaction(transaction.id);
-    if (tx && tx.status !== transaction.status) {
-        await client.sRem(`transactions:${tx.status}`, transaction.id);
-        await client.sAdd(`transactions:${transaction.status}`, transaction.id);
-    }
-    
-    // Update the transaction data
-    await client.hSet(`transaction:${transaction.id}`, {
-        userId: transaction.userId.toString(),
-        txId: transaction.txId,
-        amount: transaction.amount,
-        description: transaction.description,
-        status: transaction.status,
-        timestamp: transaction.timestamp.toString(),
-        ...(transaction.reviewedBy && { reviewedBy: transaction.reviewedBy.toString() }),
-        ...(transaction.reviewedAt && { reviewedAt: transaction.reviewedAt.toString() }),
-        ...(transaction.reviewNote && { reviewNote: transaction.reviewNote })
-    });
-}
-
-/**
- * Get all pending transactions
- */
 export async function getAllPendingTransactions(): Promise<TransactionSubmission[]> {
-    const pendingIds = await client.sMembers('transactions:pending');
-    const transactions: TransactionSubmission[] = [];
-    
-    for (const id of pendingIds) {
-        const tx = await getTransaction(id);
-        if (tx) {
-            transactions.push(tx);
-        }
-    }
-    
-    // Sort by timestamp descending (newest first)
-    return transactions.sort((a, b) => b.timestamp - a.timestamp);
+    const transactions = await client.hGetAll('transaction_submissions');
+    return Object.values(transactions)
+        .map(data => JSON.parse(data))
+        .filter((submission: TransactionSubmission) => submission.status === 'pending');
 }
 
 // Support message system
@@ -384,65 +228,16 @@ export interface SupportMessage {
     isResponse: boolean; // Whether this is a response from admin
 }
 
-/**
- * Get most recent support messages (across all users)
- */
-export async function getSupportMessages(limit: number = 10): Promise<SupportMessage[]> {
-    // Get all message IDs, sorted by timestamp (most recent first)
-    const messageIds = await client.zRange('support_messages_by_time', 0, limit - 1, { REV: true });
-    
-    const messages: SupportMessage[] = [];
-    
-    // Get each message
-    for (const messageId of messageIds) {
-        const messageData = await client.hGetAll(`support_message:${messageId}`);
-        if (messageData && messageData.userId) {
-            // Convert Redis hash to SupportMessage object
-            const message: SupportMessage = {
-                id: messageData.id || messageId.toString(),
-                userId: parseInt(messageData.userId),
-                adminId: messageData.adminId ? parseInt(messageData.adminId) : undefined,
-                message: messageData.message || '',
-                timestamp: parseInt(messageData.timestamp || '0'),
-                isResponse: messageData.isResponse === 'true'
-            };
-            messages.push(message);
-        }
-    }
-    
-    return messages;
-}
-
-/**
- * Save a new support message in Redis
- * @param message The support message to save
- */
 export async function saveSupportMessage(message: SupportMessage): Promise<void> {
-    // Save message data in a hash
-    await client.hSet(`support_message:${message.id}`, {
-        id: message.id,
-        userId: message.userId.toString(),
-        adminId: message.adminId ? message.adminId.toString() : '',
-        message: message.message,
-        timestamp: message.timestamp.toString(),
-        isResponse: message.isResponse.toString()
-    });
-    
-    // Add to user's set of messages
+    await client.hSet('support_messages', message.id, JSON.stringify(message));
+    // Also add to a user-specific list for quick lookup
     await client.sAdd(`support_messages:${message.userId}`, message.id);
     
-    // Add to sorted set for time-based retrieval
-    await client.zAdd('support_messages_by_time', {
-        score: message.timestamp,
-        value: message.id
-    });
-    
     if (DEBUG) {
-        console.log(`[STORAGE] Saved support message: ${message.id}`);
+        console.log(`[STORAGE] Saved support message: ${message.id} from ${message.isResponse ? 'admin' : 'user'} ${message.userId}`);
     }
 }
 
-// Gets all support messages for a specific user
 export async function getSupportMessagesForUser(userId: number): Promise<SupportMessage[]> {
     // Get all message IDs for this user
     const messageIds = await client.sMembers(`support_messages:${userId}`);
@@ -450,19 +245,10 @@ export async function getSupportMessagesForUser(userId: number): Promise<Support
     
     // Get all messages
     const messages: SupportMessage[] = [];
-    for (const messageId of messageIds) {
-        const messageData = await client.hGetAll(`support_message:${messageId}`);
-        if (messageData && messageData.userId) {
-            // Convert Redis hash to SupportMessage object
-            const message: SupportMessage = {
-                id: messageData.id || messageId.toString(),
-                userId: parseInt(messageData.userId),
-                adminId: messageData.adminId ? parseInt(messageData.adminId) : undefined,
-                message: messageData.message || '',
-                timestamp: parseInt(messageData.timestamp || '0'),
-                isResponse: messageData.isResponse === 'true'
-            };
-            messages.push(message);
+    for (const id of messageIds) {
+        const data = await client.hGet('support_messages', id);
+        if (data) {
+            messages.push(JSON.parse(data));
         }
     }
     
@@ -470,196 +256,75 @@ export async function getSupportMessagesForUser(userId: number): Promise<Support
     return messages.sort((a, b) => a.timestamp - b.timestamp);
 }
 
-/**
- * Error Reporting System
- */
+// Scheduled messages storage
+export interface ScheduledMessage {
+    id: string;               // Unique ID for the message
+    message: string;          // Message content
+    targetUsers: 'all' | 'connected' | 'active' | number[]; // Target audience
+    scheduledTime: number;    // When to send the message (timestamp)
+    createdBy: number;        // Admin who created the message
+    createdAt: number;        // When the message was created
+    sent: boolean;            // Whether the message has been sent
+    sentAt?: number;          // When the message was sent
+    sentToCount?: number;     // How many users received the message
+}
 
-// Save an error report to Redis
-export async function saveErrorReport(errorIdOrReport: string | any, error?: Error, errorType?: string, context?: any): Promise<void> {
-    // Support both formats - either a complete report object or individual parameters
-    if (typeof errorIdOrReport === 'string') {
-        // Called with parameters: errorId, error, errorType, context
-        const errorId = errorIdOrReport;
-        const timestamp = new Date().toISOString();
-        const userId = context?.userId || 0;
-        const userMessage = context?.message || '';
-        const commandName = context?.commandName || errorType || 'unknown';
-        
-        // Store individual error report
-        await client.hSet(`error:${errorId || 'unknown'}`, {
-            timestamp: timestamp || new Date().toISOString(),
-            commandName: commandName || 'unknown',
-            userId: userId.toString(),
-            userMessage: userMessage || '',
-            error: error?.message || 'Unknown error',
-            stack: error?.stack || ''
-        });
-        
-        // Add to sorted set by timestamp for easy retrieval
-        await client.zAdd('error_reports', [{
-            score: new Date(timestamp).getTime(),
-            value: errorId
-        }]);
-    } else {
-        // Called with a report object
-        const report = errorIdOrReport;
-        const id = report.id;
-        const timestamp = report.timestamp;
-        
-        // Store individual error report
-        await client.hSet(`error:${id}`, {
-            timestamp: timestamp,
-            commandName: report.commandName,
-            userId: report.userId.toString(),
-            userMessage: report.userMessage,
-            error: report.error,
-            stack: report.stack || ''
-        });
-        
-        // Add to sorted set by timestamp for easy retrieval
-        await client.zAdd('error_reports', [{
-            score: new Date(timestamp).getTime(),
-            value: report.id
-        }]);
-    }
-    
-    // Maintain only the last 100 error reports
-    const count = await client.zCard('error_reports');
-    if (count > 100) {
-        const toRemove = count - 100;
-        const oldestIds = await client.zRange('error_reports', 0, toRemove - 1);
-        
-        if (oldestIds.length > 0) {
-            // Remove from sorted set
-            await client.zRem('error_reports', oldestIds);
-            
-            // Remove individual error reports
-            for (const oldId of oldestIds) {
-                await client.del(`error:${oldId}`);
-            }
-        }
-    }
-    
+/**
+ * Save a scheduled message
+ */
+export async function saveScheduledMessage(message: ScheduledMessage): Promise<void> {
+    await client.hSet('scheduled_messages', message.id, JSON.stringify(message));
     if (DEBUG) {
-        console.log(`[STORAGE] Saved error report: ${typeof errorIdOrReport === 'string' ? errorIdOrReport : errorIdOrReport.id}`);
+        console.log(`[STORAGE] Saved scheduled message: ${message.id}`);
     }
 }
 
 /**
- * Tutorial System Storage
+ * Get a scheduled message by ID
  */
-
-export interface TutorialState {
-    userId: number;
-    currentStep: number;
-    completed: boolean;
-    startedAt: number;
-    lastUpdatedAt: number;
-    skipped: boolean;
-}
-
-// Save a user's tutorial state
-export async function saveTutorialState(state: TutorialState): Promise<void> {
-    await client.hSet('tutorial_states', state.userId.toString(), JSON.stringify(state));
-    if (DEBUG) {
-        console.log(`[STORAGE] Saved tutorial state for user: ${state.userId}, step: ${state.currentStep}`);
+export async function getScheduledMessage(id: string): Promise<ScheduledMessage | null> {
+    const data = await client.hGet('scheduled_messages', id);
+    if (data) {
+        return JSON.parse(data);
     }
-}
-
-// Get a user's tutorial state
-export async function getTutorialState(userId: number): Promise<TutorialState | null> {
-    const data = await client.hGet('tutorial_states', userId.toString());
-    return data ? JSON.parse(data) : null;
+    return null;
 }
 
 /**
- * Analytics Storage
+ * Get all scheduled messages
  */
-
-// Track a specific analytics event
-export async function trackAnalyticsEvent(eventType: string, userId: number, metadata?: any): Promise<void> {
-    const timestamp = Date.now();
-    const eventId = `${timestamp}:${Math.random().toString(36).substring(2, 8)}`;
-    
-    const event = {
-        id: eventId,
-        type: eventType,
-        userId: userId,
-        timestamp: timestamp,
-        metadata: metadata || {}
-    };
-    
-    // Store event in Redis
-    await client.hSet('analytics_events', eventId, JSON.stringify(event));
-    
-    // Add to sorted set by timestamp
-    await client.zAdd('analytics_events_by_time', [{
-        score: timestamp,
-        value: eventId
-    }]);
-    
-    // Add to set of events by type
-    await client.sAdd(`analytics_events:${eventType}`, eventId);
-    
-    // Add to set of events by user
-    await client.sAdd(`analytics_events:user:${userId}`, eventId);
-    
-    if (DEBUG) {
-        console.log(`[ANALYTICS] Tracked ${eventType} for user ${userId}`);
-    }
+export async function getAllScheduledMessages(): Promise<ScheduledMessage[]> {
+    const messages = await client.hGetAll('scheduled_messages');
+    return Object.values(messages).map(msg => JSON.parse(msg));
 }
 
-// Get analytics counts for dashboard
-export async function getAnalyticsSummary(): Promise<any> {
-    // Get total users
-    const totalUsers = await client.hLen('all_users');
-    
-    // Get connected wallet users
-    const connectedUsers = await client.hLen('connected_users');
-    
-    // Get active users in last 24 hours
+/**
+ * Get pending scheduled messages (not sent and scheduledTime <= now)
+ */
+export async function getPendingScheduledMessages(): Promise<ScheduledMessage[]> {
     const now = Date.now();
-    const oneDayAgo = now - (24 * 60 * 60 * 1000);
-    
-    const allUsersData = await client.hGetAll('all_users');
-    const activeUsers = Object.values(allUsersData)
-        .map(data => JSON.parse(data))
-        .filter((userData: UserData) => userData.lastActivity > oneDayAgo)
-        .length;
-    
-    // Get transaction counts
-    const transactions = await client.hGetAll('transaction_submissions');
-    const transactionCount = Object.keys(transactions).length;
-    
-    // Count by status
-    const pendingTransactions = Object.values(transactions)
-        .map(data => JSON.parse(data))
-        .filter((tx: TransactionSubmission) => tx.status === 'pending')
-        .length;
-    
-    const approvedTransactions = Object.values(transactions)
-        .map(data => JSON.parse(data))
-        .filter((tx: TransactionSubmission) => tx.status === 'approved')
-        .length;
-    
-    const rejectedTransactions = Object.values(transactions)
-        .map(data => JSON.parse(data))
-        .filter((tx: TransactionSubmission) => tx.status === 'rejected')
-        .length;
-    
-    // Return the summary
-    return {
-        totalUsers,
-        connectedUsers,
-        activeUsers24h: activeUsers,
-        transactionStats: {
-            total: transactionCount,
-            pending: pendingTransactions,
-            approved: approvedTransactions,
-            rejected: rejectedTransactions
-        },
-        timestamp: now
-    };
+    const messages = await getAllScheduledMessages();
+    return messages.filter(msg => !msg.sent && msg.scheduledTime <= now);
+}
+
+/**
+ * Update a scheduled message
+ */
+export async function updateScheduledMessage(message: ScheduledMessage): Promise<void> {
+    await client.hSet('scheduled_messages', message.id, JSON.stringify(message));
+    if (DEBUG) {
+        console.log(`[STORAGE] Updated scheduled message: ${message.id}`);
+    }
+}
+
+/**
+ * Delete a scheduled message
+ */
+export async function deleteScheduledMessage(id: string): Promise<void> {
+    await client.hDel('scheduled_messages', id);
+    if (DEBUG) {
+        console.log(`[STORAGE] Deleted scheduled message: ${id}`);
+    }
 }
 
 export class TonConnectStorage implements IStorage {
