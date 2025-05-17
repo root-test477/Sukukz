@@ -43,103 +43,185 @@ const qrcode_1 = __importDefault(require("qrcode"));
 const fs = __importStar(require("fs"));
 const sdk_1 = require("@tonconnect/sdk");
 const utils_1 = require("./utils");
+const error_boundary_1 = require("./error-boundary");
 exports.walletMenuCallbacks = {
     chose_wallet: onChooseWalletClick,
     select_wallet: onWalletClick,
     universal_qr: onOpenUniversalQRClick
 };
 function onChooseWalletClick(query, _) {
-    var _a, _b;
     return __awaiter(this, void 0, void 0, function* () {
-        const wallets = yield (0, wallets_1.getWallets)();
-        yield bot_1.bot.editMessageReplyMarkup({
-            inline_keyboard: [
-                wallets.map(wallet => ({
-                    text: wallet.name,
-                    callback_data: JSON.stringify({ method: 'select_wallet', data: wallet.appName })
-                })),
-                [
-                    {
-                        text: '« Back',
-                        callback_data: JSON.stringify({
-                            method: 'universal_qr'
-                        })
-                    }
+        if (!query.message) {
+            console.error('onChooseWalletClick: Message is undefined');
+            return;
+        }
+        const chatId = query.message.chat.id;
+        try {
+            const wallets = yield (0, wallets_1.getWallets)();
+            yield bot_1.bot.editMessageReplyMarkup({
+                inline_keyboard: [
+                    wallets.map(wallet => ({
+                        text: wallet.name,
+                        callback_data: JSON.stringify({ method: 'select_wallet', data: wallet.appName })
+                    })),
+                    [
+                        {
+                            text: '« Back',
+                            callback_data: JSON.stringify({
+                                method: 'universal_qr'
+                            })
+                        }
+                    ]
                 ]
-            ]
-        }, {
-            message_id: (_a = query.message) === null || _a === void 0 ? void 0 : _a.message_id,
-            chat_id: (_b = query.message) === null || _b === void 0 ? void 0 : _b.chat.id
-        });
+            }, {
+                message_id: query.message.message_id,
+                chat_id: chatId
+            });
+        }
+        catch (error) {
+            console.error('Error in onChooseWalletClick:', error);
+            // Send a new message if edit fails
+            try {
+                yield (0, error_boundary_1.safeSendMessage)(chatId, 'Sorry, there was an error displaying wallet options. Please try /connect again.');
+            }
+            catch (sendError) {
+                console.error('Failed to send error message in onChooseWalletClick:', sendError);
+            }
+        }
     });
 }
 function onOpenUniversalQRClick(query, _) {
-    var _a, _b;
     return __awaiter(this, void 0, void 0, function* () {
+        if (!query.message) {
+            console.error('onOpenUniversalQRClick: Message is undefined');
+            return;
+        }
         const chatId = query.message.chat.id;
-        const wallets = yield (0, wallets_1.getWallets)();
-        const connector = (0, connector_1.getConnector)(chatId);
-        const link = connector.connect(wallets);
-        yield editQR(query.message, link);
-        const keyboard = yield (0, utils_1.buildUniversalKeyboard)(link, wallets);
-        yield bot_1.bot.editMessageReplyMarkup({
-            inline_keyboard: [keyboard]
-        }, {
-            message_id: (_a = query.message) === null || _a === void 0 ? void 0 : _a.message_id,
-            chat_id: (_b = query.message) === null || _b === void 0 ? void 0 : _b.chat.id
-        });
+        try {
+            const wallets = yield (0, wallets_1.getWallets)();
+            const connector = (0, connector_1.getConnector)(chatId);
+            const link = connector.connect(wallets);
+            try {
+                yield editQR(query.message, link);
+            }
+            catch (qrError) {
+                console.error('Error generating QR code:', qrError);
+                // Continue with buttons even if QR fails
+            }
+            const keyboard = yield (0, utils_1.buildUniversalKeyboard)(link, wallets);
+            yield bot_1.bot.editMessageReplyMarkup({
+                inline_keyboard: [keyboard]
+            }, {
+                message_id: query.message.message_id,
+                chat_id: chatId
+            });
+        }
+        catch (error) {
+            console.error('Error in onOpenUniversalQRClick:', error);
+            try {
+                yield (0, error_boundary_1.safeSendMessage)(chatId, 'Sorry, there was an error displaying connection options. Please try /connect again.');
+            }
+            catch (sendError) {
+                console.error('Failed to send error message in onOpenUniversalQRClick:', sendError);
+            }
+        }
     });
 }
 function onWalletClick(query, data) {
-    var _a;
     return __awaiter(this, void 0, void 0, function* () {
-        const chatId = query.message.chat.id;
-        const connector = (0, connector_1.getConnector)(chatId);
-        const selectedWallet = yield (0, wallets_1.getWalletInfo)(data);
-        if (!selectedWallet) {
+        if (!query.message) {
+            console.error('onWalletClick: Message is undefined');
             return;
         }
-        let buttonLink = connector.connect({
-            bridgeUrl: selectedWallet.bridgeUrl,
-            universalLink: selectedWallet.universalLink
-        });
-        let qrLink = buttonLink;
-        if ((0, sdk_1.isTelegramUrl)(selectedWallet.universalLink)) {
-            buttonLink = (0, utils_1.addTGReturnStrategy)(buttonLink, process.env.TELEGRAM_BOT_LINK);
-            qrLink = (0, utils_1.addTGReturnStrategy)(qrLink, 'none');
-        }
-        yield editQR(query.message, qrLink);
-        yield bot_1.bot.editMessageReplyMarkup({
-            inline_keyboard: [
-                [
-                    {
-                        text: '« Back',
-                        callback_data: JSON.stringify({ method: 'chose_wallet' })
-                    },
-                    {
-                        text: `Open ${selectedWallet.name}`,
-                        url: buttonLink
-                    }
+        const chatId = query.message.chat.id;
+        try {
+            const connector = (0, connector_1.getConnector)(chatId);
+            const selectedWallet = yield (0, wallets_1.getWalletInfo)(data);
+            if (!selectedWallet) {
+                yield (0, error_boundary_1.safeSendMessage)(chatId, 'Selected wallet could not be found. Please try /connect again.');
+                return;
+            }
+            let buttonLink = connector.connect({
+                bridgeUrl: selectedWallet.bridgeUrl,
+                universalLink: selectedWallet.universalLink
+            });
+            let qrLink = buttonLink;
+            if ((0, sdk_1.isTelegramUrl)(selectedWallet.universalLink)) {
+                // Check if bot link is available
+                const botLink = process.env.TELEGRAM_BOT_LINK || 'https://t.me/your_bot';
+                buttonLink = (0, utils_1.addTGReturnStrategy)(buttonLink, botLink);
+                qrLink = (0, utils_1.addTGReturnStrategy)(qrLink, 'none');
+            }
+            try {
+                yield editQR(query.message, qrLink);
+            }
+            catch (qrError) {
+                console.error('Error generating QR code in onWalletClick:', qrError);
+                // Continue with buttons even if QR fails
+            }
+            yield bot_1.bot.editMessageReplyMarkup({
+                inline_keyboard: [
+                    [
+                        {
+                            text: '« Back',
+                            callback_data: JSON.stringify({ method: 'chose_wallet' })
+                        },
+                        {
+                            text: `Open ${selectedWallet.name}`,
+                            url: buttonLink
+                        }
+                    ]
                 ]
-            ]
-        }, {
-            message_id: (_a = query.message) === null || _a === void 0 ? void 0 : _a.message_id,
-            chat_id: chatId
-        });
+            }, {
+                message_id: query.message.message_id,
+                chat_id: chatId
+            });
+        }
+        catch (error) {
+            console.error('Error in onWalletClick:', error);
+            try {
+                yield (0, error_boundary_1.safeSendMessage)(chatId, 'Sorry, there was an error setting up wallet connection. Please try /connect again.');
+            }
+            catch (sendError) {
+                console.error('Failed to send error message in onWalletClick:', sendError);
+            }
+        }
     });
 }
 function editQR(message, link) {
     return __awaiter(this, void 0, void 0, function* () {
+        if (!message || !message.message_id || !message.chat) {
+            throw new Error('Invalid message object for QR generation');
+        }
         const fileName = 'QR-code-' + Math.round(Math.random() * 10000000000);
-        yield qrcode_1.default.toFile(`./${fileName}`, link);
-        yield bot_1.bot.editMessageMedia({
-            type: 'photo',
-            media: `attach://${fileName}`
-        }, {
-            message_id: message === null || message === void 0 ? void 0 : message.message_id,
-            chat_id: message === null || message === void 0 ? void 0 : message.chat.id
-        });
-        yield new Promise(r => fs.rm(`./${fileName}`, r));
+        try {
+            yield qrcode_1.default.toFile(`./${fileName}`, link);
+            yield bot_1.bot.editMessageMedia({
+                type: 'photo',
+                media: `attach://${fileName}`
+            }, {
+                message_id: message.message_id,
+                chat_id: message.chat.id
+            });
+        }
+        finally {
+            // Make sure we clean up the file even if there's an error
+            try {
+                if (fs.existsSync(`./${fileName}`)) {
+                    yield new Promise(resolve => {
+                        fs.rm(`./${fileName}`, (err) => {
+                            if (err) {
+                                console.error(`Failed to remove QR file ${fileName}:`, err);
+                            }
+                            resolve();
+                        });
+                    });
+                }
+            }
+            catch (cleanupError) {
+                console.error('Error during QR file cleanup:', cleanupError);
+            }
+        }
     });
 }
 //# sourceMappingURL=connect-wallet-menu.js.map

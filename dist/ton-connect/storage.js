@@ -32,44 +32,64 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.TonConnectStorage = exports.getSupportMessagesForUser = exports.saveSupportMessage = exports.getAllPendingTransactions = exports.getTransactionSubmission = exports.updateTransactionStatus = exports.saveTransactionSubmission = exports.getAllTrackedUsers = exports.getAllConnectedUsers = exports.getUserData = exports.removeConnectedUser = exports.updateUserActivity = exports.saveConnectedUser = exports.trackUserInteraction = exports.initRedisClient = void 0;
+exports.TonConnectStorage = exports.getAnalyticsSummary = exports.getRedisClient = exports.saveErrorReport = exports.updateTransaction = exports.getTransaction = exports.saveTransaction = exports.getTutorialState = exports.saveTutorialState = exports.getSupportMessages = exports.getSupportMessagesForUser = exports.saveSupportMessage = exports.getAllPendingTransactions = exports.getTransactionSubmission = exports.updateTransactionStatus = exports.saveTransactionSubmission = exports.getAllTrackedUsers = exports.getAllConnectedUsers = exports.getUserData = exports.removeConnectedUser = exports.updateUserActivity = exports.saveConnectedUser = exports.trackUserInteraction = exports.initRedisClient = exports.client = void 0;
 const redis_1 = require("redis");
 const process = __importStar(require("process"));
 const DEBUG = process.env.DEBUG_MODE === 'true';
-const client = (0, redis_1.createClient)({ url: process.env.REDIS_URL });
-client.on('error', err => console.log('Redis Client Error', err));
+// Export client so it can be used in other files
+exports.client = (0, redis_1.createClient)({
+    url: process.env.REDIS_URL || 'redis://localhost:6379',
+    socket: {
+        connectTimeout: 10000,
+        keepAlive: 10000
+    }
+});
+exports.client.on('error', err => console.log('Redis Client Error', err));
 function initRedisClient() {
     return __awaiter(this, void 0, void 0, function* () {
-        yield client.connect();
+        yield exports.client.connect();
     });
 }
 exports.initRedisClient = initRedisClient;
 // Static methods for user tracking
 /**
  * Track any user interaction with the bot, even if they haven't connected a wallet
+ * @param chatId User's chat ID
+ * @param displayName Optional display name of the user
+ * @param username Optional username of the user (without @ symbol)
  */
-function trackUserInteraction(chatId) {
+function trackUserInteraction(chatId, displayName, username) {
     return __awaiter(this, void 0, void 0, function* () {
         const now = Date.now();
         // Check if user already exists in any tracking system
-        const existingUserData = yield client.hGet('all_users', chatId.toString());
-        const connectedUserData = yield client.hGet('connected_users', chatId.toString());
+        const existingUserData = yield exports.client.hGet('all_users', chatId.toString());
+        const connectedUserData = yield exports.client.hGet('connected_users', chatId.toString());
         if (existingUserData) {
-            // User already tracked, just update lastActivity
+            // User already tracked, update lastActivity, displayName and username if provided
             const userData = JSON.parse(existingUserData);
             userData.lastActivity = now;
-            yield client.hSet('all_users', chatId.toString(), JSON.stringify(userData));
+            // Update display name if provided and different from current
+            if (displayName && userData.displayName !== displayName) {
+                userData.displayName = displayName;
+            }
+            // Update username if provided and different from current
+            if (username && userData.username !== username) {
+                userData.username = username;
+            }
+            yield exports.client.hSet('all_users', chatId.toString(), JSON.stringify(userData));
         }
         else {
             // New user, create record
             const userData = {
                 chatId,
+                displayName: displayName || undefined,
+                username: username || undefined,
                 firstSeenTimestamp: now,
                 connectionTimestamp: 0,
                 lastActivity: now,
                 walletEverConnected: false
             };
-            yield client.hSet('all_users', chatId.toString(), JSON.stringify(userData));
+            yield exports.client.hSet('all_users', chatId.toString(), JSON.stringify(userData));
             if (DEBUG) {
                 console.log(`[STORAGE] Tracked new user: ${chatId}`);
             }
@@ -78,7 +98,7 @@ function trackUserInteraction(chatId) {
         if (connectedUserData && !existingUserData) {
             const connData = JSON.parse(connectedUserData);
             connData.walletEverConnected = true;
-            yield client.hSet('all_users', chatId.toString(), JSON.stringify(connData));
+            yield exports.client.hSet('all_users', chatId.toString(), JSON.stringify(connData));
         }
     });
 }
@@ -91,7 +111,7 @@ function saveConnectedUser(chatId, walletAddress) {
         const now = Date.now();
         // Get existing user data if any
         let userData;
-        const existingUserData = yield client.hGet('all_users', chatId.toString());
+        const existingUserData = yield exports.client.hGet('all_users', chatId.toString());
         if (existingUserData) {
             userData = JSON.parse(existingUserData);
             userData.walletAddress = walletAddress;
@@ -110,8 +130,8 @@ function saveConnectedUser(chatId, walletAddress) {
             };
         }
         // Update both connected_users and all_users
-        yield client.hSet('connected_users', chatId.toString(), JSON.stringify(userData));
-        yield client.hSet('all_users', chatId.toString(), JSON.stringify(userData));
+        yield exports.client.hSet('connected_users', chatId.toString(), JSON.stringify(userData));
+        yield exports.client.hSet('all_users', chatId.toString(), JSON.stringify(userData));
         if (DEBUG) {
             console.log(`[STORAGE] Saved connected user: ${chatId} with wallet ${walletAddress}`);
         }
@@ -126,7 +146,7 @@ function updateUserActivity(chatId, transactionAmount) {
             if (transactionAmount) {
                 userData.lastTransactionAmount = transactionAmount;
             }
-            yield client.hSet('connected_users', chatId.toString(), JSON.stringify(userData));
+            yield exports.client.hSet('connected_users', chatId.toString(), JSON.stringify(userData));
             if (DEBUG) {
                 console.log(`[STORAGE] Updated user activity: ${chatId}`);
             }
@@ -136,7 +156,7 @@ function updateUserActivity(chatId, transactionAmount) {
 exports.updateUserActivity = updateUserActivity;
 function removeConnectedUser(chatId) {
     return __awaiter(this, void 0, void 0, function* () {
-        yield client.hDel('connected_users', chatId.toString());
+        yield exports.client.hDel('connected_users', chatId.toString());
         if (DEBUG) {
             console.log(`[STORAGE] Removed connected user: ${chatId}`);
         }
@@ -145,7 +165,7 @@ function removeConnectedUser(chatId) {
 exports.removeConnectedUser = removeConnectedUser;
 function getUserData(chatId) {
     return __awaiter(this, void 0, void 0, function* () {
-        const data = yield client.hGet('connected_users', chatId.toString());
+        const data = yield exports.client.hGet('connected_users', chatId.toString());
         if (data) {
             return JSON.parse(data);
         }
@@ -155,7 +175,7 @@ function getUserData(chatId) {
 exports.getUserData = getUserData;
 function getAllConnectedUsers() {
     return __awaiter(this, void 0, void 0, function* () {
-        const users = yield client.hGetAll('connected_users');
+        const users = yield exports.client.hGetAll('connected_users');
         return Object.values(users).map(userData => JSON.parse(userData));
     });
 }
@@ -165,7 +185,7 @@ exports.getAllConnectedUsers = getAllConnectedUsers;
  */
 function getAllTrackedUsers() {
     return __awaiter(this, void 0, void 0, function* () {
-        const users = yield client.hGetAll('all_users');
+        const users = yield exports.client.hGetAll('all_users');
         return Object.values(users).map(userData => JSON.parse(userData));
     });
 }
@@ -178,7 +198,7 @@ function saveTransactionSubmission(chatId, transactionId) {
             timestamp: Date.now(),
             status: 'pending'
         };
-        yield client.hSet('transaction_submissions', transactionId, JSON.stringify(submission));
+        yield exports.client.hSet('transaction_submissions', transactionId, JSON.stringify(submission));
         if (DEBUG) {
             console.log(`[STORAGE] Saved transaction submission: ${transactionId} from user ${chatId}`);
         }
@@ -187,7 +207,7 @@ function saveTransactionSubmission(chatId, transactionId) {
 exports.saveTransactionSubmission = saveTransactionSubmission;
 function updateTransactionStatus(transactionId, status, adminId, notes) {
     return __awaiter(this, void 0, void 0, function* () {
-        const data = yield client.hGet('transaction_submissions', transactionId);
+        const data = yield exports.client.hGet('transaction_submissions', transactionId);
         if (!data)
             return null;
         const submission = JSON.parse(data);
@@ -195,7 +215,7 @@ function updateTransactionStatus(transactionId, status, adminId, notes) {
         submission.approvedBy = adminId;
         if (notes)
             submission.notes = notes;
-        yield client.hSet('transaction_submissions', transactionId, JSON.stringify(submission));
+        yield exports.client.hSet('transaction_submissions', transactionId, JSON.stringify(submission));
         if (DEBUG) {
             console.log(`[STORAGE] Updated transaction ${transactionId} status to ${status} by admin ${adminId}`);
         }
@@ -205,14 +225,14 @@ function updateTransactionStatus(transactionId, status, adminId, notes) {
 exports.updateTransactionStatus = updateTransactionStatus;
 function getTransactionSubmission(transactionId) {
     return __awaiter(this, void 0, void 0, function* () {
-        const data = yield client.hGet('transaction_submissions', transactionId);
+        const data = yield exports.client.hGet('transaction_submissions', transactionId);
         return data ? JSON.parse(data) : null;
     });
 }
 exports.getTransactionSubmission = getTransactionSubmission;
 function getAllPendingTransactions() {
     return __awaiter(this, void 0, void 0, function* () {
-        const transactions = yield client.hGetAll('transaction_submissions');
+        const transactions = yield exports.client.hGetAll('transaction_submissions');
         return Object.values(transactions)
             .map(data => JSON.parse(data))
             .filter((submission) => submission.status === 'pending');
@@ -221,9 +241,9 @@ function getAllPendingTransactions() {
 exports.getAllPendingTransactions = getAllPendingTransactions;
 function saveSupportMessage(message) {
     return __awaiter(this, void 0, void 0, function* () {
-        yield client.hSet('support_messages', message.id, JSON.stringify(message));
+        yield exports.client.hSet('support_messages', message.id, JSON.stringify(message));
         // Also add to a user-specific list for quick lookup
-        yield client.sAdd(`support_messages:${message.userId}`, message.id);
+        yield exports.client.sAdd(`support_messages:${message.userId}`, message.id);
         if (DEBUG) {
             console.log(`[STORAGE] Saved support message: ${message.id} from ${message.isResponse ? 'admin' : 'user'} ${message.userId}`);
         }
@@ -233,13 +253,13 @@ exports.saveSupportMessage = saveSupportMessage;
 function getSupportMessagesForUser(userId) {
     return __awaiter(this, void 0, void 0, function* () {
         // Get all message IDs for this user
-        const messageIds = yield client.sMembers(`support_messages:${userId}`);
+        const messageIds = yield exports.client.sMembers(`support_messages:${userId}`);
         if (!messageIds.length)
             return [];
         // Get all messages
         const messages = [];
         for (const id of messageIds) {
-            const data = yield client.hGet('support_messages', id);
+            const data = yield exports.client.hGet('support_messages', id);
             if (data) {
                 messages.push(JSON.parse(data));
             }
@@ -249,6 +269,133 @@ function getSupportMessagesForUser(userId) {
     });
 }
 exports.getSupportMessagesForUser = getSupportMessagesForUser;
+// Alias for backward compatibility
+exports.getSupportMessages = getSupportMessagesForUser;
+/**
+ * Save tutorial state for a user
+ * @param state Tutorial state data
+ */
+function saveTutorialState(state) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const userId = state.userId || state.chatId;
+        yield exports.client.hSet('tutorial_progress', userId.toString(), JSON.stringify(state));
+        if (DEBUG) {
+            console.log(`[STORAGE] Saved tutorial state for user ${userId}: Step ${state.currentStep}`);
+        }
+    });
+}
+exports.saveTutorialState = saveTutorialState;
+/**
+ * Get tutorial state for a user
+ * @param chatId User's chat ID
+ * @returns Tutorial state or null if not found
+ */
+function getTutorialState(chatId) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const data = yield exports.client.hGet('tutorial_progress', chatId.toString());
+        if (!data)
+            return null;
+        return JSON.parse(data);
+    });
+}
+exports.getTutorialState = getTutorialState;
+/**
+ * Save a transaction to the database
+ * @param userId User's chat ID
+ * @param transactionId Transaction ID
+ * @param amount Optional transaction amount
+ * @param description Optional transaction description
+ */
+function saveTransaction(userId, transactionId, amount, description) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const transaction = {
+            id: transactionId,
+            userId,
+            timestamp: Date.now(),
+            status: 'pending',
+            amount,
+            description
+        };
+        yield exports.client.hSet('transactions', transactionId, JSON.stringify(transaction));
+        if (DEBUG) {
+            console.log(`[STORAGE] Saved transaction ${transactionId} for user ${userId}`);
+        }
+    });
+}
+exports.saveTransaction = saveTransaction;
+/**
+ * Get a transaction by ID
+ * @param transactionId Transaction ID
+ */
+function getTransaction(transactionId) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const data = yield exports.client.hGet('transactions', transactionId);
+        return data ? JSON.parse(data) : null;
+    });
+}
+exports.getTransaction = getTransaction;
+/**
+ * Update a transaction
+ * @param transactionId Transaction ID
+ * @param updates Fields to update
+ */
+function updateTransaction(transactionId, updates) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const transaction = yield getTransaction(transactionId);
+        if (!transaction)
+            return null;
+        const updated = Object.assign(Object.assign({}, transaction), updates);
+        yield exports.client.hSet('transactions', transactionId, JSON.stringify(updated));
+        if (DEBUG) {
+            console.log(`[STORAGE] Updated transaction ${transactionId}`);
+        }
+        return updated;
+    });
+}
+exports.updateTransaction = updateTransaction;
+/**
+ * Save error report
+ * @param error Error report
+ */
+function saveErrorReport(error) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const id = `error_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+        yield exports.client.hSet('error_reports', id, JSON.stringify(error));
+        if (DEBUG) {
+            console.log(`[STORAGE] Saved error report: ${id} - ${error.message}`);
+        }
+    });
+}
+exports.saveErrorReport = saveErrorReport;
+/**
+ * Get Redis client (for direct access in other modules)
+ */
+function getRedisClient() {
+    return exports.client;
+}
+exports.getRedisClient = getRedisClient;
+/**
+ * Get analytics summary for admin dashboard
+ */
+function getAnalyticsSummary() {
+    return __awaiter(this, void 0, void 0, function* () {
+        const allUsers = yield getAllTrackedUsers();
+        const connectedUsers = yield getAllConnectedUsers();
+        return {
+            totalUsers: allUsers.length,
+            activeUsers: connectedUsers.length,
+            inactiveUsers: allUsers.length - connectedUsers.length,
+            userActivity: allUsers.map(user => ({
+                chatId: user.chatId,
+                displayName: user.displayName,
+                username: user.username,
+                lastActivity: user.lastActivity,
+                connected: !!user.walletAddress
+            }))
+        };
+    });
+}
+exports.getAnalyticsSummary = getAnalyticsSummary;
 class TonConnectStorage {
     constructor(chatId) {
         this.chatId = chatId;
@@ -259,7 +406,7 @@ class TonConnectStorage {
     removeItem(key) {
         return __awaiter(this, void 0, void 0, function* () {
             const storeKey = this.getKey(key);
-            yield client.del(storeKey);
+            yield exports.client.del(storeKey);
             if (DEBUG) {
                 console.log(`[STORAGE] removeItem: ${storeKey}`);
             }
@@ -268,7 +415,7 @@ class TonConnectStorage {
     setItem(key, value) {
         return __awaiter(this, void 0, void 0, function* () {
             const storeKey = this.getKey(key);
-            yield client.set(storeKey, value);
+            yield exports.client.set(storeKey, value);
             if (DEBUG) {
                 console.log(`[STORAGE] setItem: ${storeKey} = ${value}`);
             }
@@ -277,7 +424,7 @@ class TonConnectStorage {
     getItem(key) {
         return __awaiter(this, void 0, void 0, function* () {
             const storeKey = this.getKey(key);
-            const value = yield client.get(storeKey);
+            const value = yield exports.client.get(storeKey);
             if (DEBUG) {
                 console.log(`[STORAGE] getItem: ${storeKey} = ${value}`);
             }

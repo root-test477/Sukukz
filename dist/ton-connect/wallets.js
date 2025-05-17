@@ -9,7 +9,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getWalletInfo = exports.getWallets = void 0;
+exports.getWalletBalance = exports.getWalletInfo = exports.getWallets = void 0;
 const sdk_1 = require("@tonconnect/sdk");
 const walletsListManager = new sdk_1.WalletsListManager({
     cacheTTLMs: Number(process.env.WALLETS_LIST_CACHE_TTL_MS)
@@ -28,4 +28,24 @@ function getWalletInfo(walletAppName) {
     });
 }
 exports.getWalletInfo = getWalletInfo;
+/**
+ * Get the balance of a wallet address in TON
+ * @param walletAddress The wallet address to check
+ * @returns The wallet balance in TON as a string with 2 decimal places
+ */
+function getWalletBalance(walletAddress) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            // For demo purposes, we're just returning a random balance
+            // In a real application, you would call the TON API to get the actual balance
+            const randomBalance = (Math.random() * 100).toFixed(2);
+            return randomBalance;
+        }
+        catch (error) {
+            console.error(`Error getting wallet balance for ${walletAddress}:`, error);
+            return '0.00';
+        }
+    });
+}
+exports.getWalletBalance = getWalletBalance;
 //# sourceMappingURL=wallets.js.map

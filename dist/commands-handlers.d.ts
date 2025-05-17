@@ -15,11 +15,15 @@ export declare function handleFundingCommand(msg: TelegramBot.Message): Promise<
 export declare function handleInfoCommand(msg: TelegramBot.Message): Promise<void>;
 /**
  * Handler for the /support command
+}
+
+/**
+ * Handler for the /support command
  * Allows users to send support messages and admins to respond
  */
 export declare function handleSupportCommand(msg: TelegramBot.Message): Promise<void>;
 /**
- * Handler for the /pay-now command
+ * Handler for the /pay_now command
  * Allows users to submit transaction IDs for admin approval
  * If user is admin, it shows pending transaction submissions
  */

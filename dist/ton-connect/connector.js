@@ -35,10 +35,11 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getConnector = void 0;
+exports.disconnectWallet = exports.getConnectedWallet = exports.getConnector = void 0;
 const sdk_1 = __importDefault(require("@tonconnect/sdk"));
 const storage_1 = require("./storage");
 const process = __importStar(require("process"));
+const storage_2 = require("./storage");
 const DEBUG = process.env.DEBUG_MODE === 'true';
 const connectors = new Map();
 /**
@@ -74,30 +75,97 @@ function getConnector(chatId, onConnectorExpired) {
         if (DEBUG) {
             console.log(`[CONNECTOR] Creating new connector for chatId: ${chatId}`);
         }
-        storedItem = {
-            connector: new sdk_1.default({
-                manifestUrl: process.env.MANIFEST_URL,
-                storage: new storage_1.TonConnectStorage(chatId)
-            }),
-            onConnectorExpired: []
-        };
+        // Log the manifest URL for debugging
+        if (DEBUG) {
+            console.log(`[CONNECTOR] Using manifest URL: ${process.env.MANIFEST_URL}`);
+        }
+        try {
+            storedItem = {
+                connector: new sdk_1.default({
+                    manifestUrl: process.env.MANIFEST_URL,
+                    storage: new storage_1.TonConnectStorage(chatId)
+                }),
+                onConnectorExpired: []
+            };
+        }
+        catch (error) {
+            console.error('[CONNECTOR] Error creating connector:', error);
+            // Create a fallback connector anyway to avoid runtime errors
+            storedItem = {
+                connector: new sdk_1.default({
+                    manifestUrl: process.env.MANIFEST_URL,
+                    storage: new storage_1.TonConnectStorage(chatId)
+                }),
+                onConnectorExpired: []
+            };
+        }
     }
     if (onConnectorExpired) {
         storedItem.onConnectorExpired.push(onConnectorExpired);
     }
+    // Create connector TTL
+    const TTL = process.env.CONNECTOR_TTL_MS
+        ? parseInt(process.env.CONNECTOR_TTL_MS)
+        : 10 * 60 * 1000; // 10 minutes by default
     storedItem.timeout = setTimeout(() => {
-        if (connectors.has(chatId)) {
-            const storedItem = connectors.get(chatId);
-            storedItem.connector.pauseConnection();
-            storedItem.onConnectorExpired.forEach(callback => callback(storedItem.connector));
-            connectors.delete(chatId);
+        if (DEBUG) {
+            console.log(`[CONNECTOR] Connector TTL expired for chatId: ${chatId}`);
         }
-    }, Number(process.env.CONNECTOR_TTL_MS));
+        storedItem.onConnectorExpired.forEach(cb => cb(storedItem.connector));
+        connectors.delete(chatId);
+    }, TTL);
     connectors.set(chatId, storedItem);
+    // Add event listeners for debugging
+    if (DEBUG) {
+        storedItem.connector.onStatusChange((status) => {
+            console.log(`[CONNECTOR] Status changed for chatId: ${chatId}, status:`, status);
+        });
+        // Log initial connection state
+        console.log(`[CONNECTOR] Initial connection state for chatId: ${chatId}:`, storedItem.connector.connected ? 'Connected' : 'Disconnected');
+    }
     if (DEBUG) {
         console.log(`[CONNECTOR] Returning connector for chatId: ${chatId}, connected: ${storedItem.connector.connected}`);
     }
     return storedItem.connector;
 }
 exports.getConnector = getConnector;
+/**
+ * Check if a wallet is connected for a chat ID
+ * @param chatId - The chat ID to check
+ * @returns The wallet address if connected, null otherwise
+ */
+function getConnectedWallet(chatId) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const connector = getConnector(chatId);
+        const walletInfo = connector.wallet;
+        if (connector.connected && walletInfo) {
+            return walletInfo.account.address;
+        }
+        return null;
+    });
+}
+exports.getConnectedWallet = getConnectedWallet;
+/**
+ * Disconnect a wallet for a chat ID
+ * @param chatId - The chat ID to disconnect
+ */
+function disconnectWallet(chatId) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const connector = getConnector(chatId);
+        try {
+            if (connector.connected) {
+                yield connector.disconnect();
+            }
+            yield (0, storage_2.removeConnectedUser)(chatId);
+            if (DEBUG) {
+                console.log(`[CONNECTOR] Disconnected wallet for chatId: ${chatId}`);
+            }
+        }
+        catch (error) {
+            console.error(`[CONNECTOR] Error disconnecting wallet for chatId: ${chatId}:`, error);
+            throw error;
+        }
+    });
+}
+exports.disconnectWallet = disconnectWallet;
 //# sourceMappingURL=connector.js.map
