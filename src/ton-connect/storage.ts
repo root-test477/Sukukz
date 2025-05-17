@@ -170,6 +170,8 @@ export interface TransactionSubmission {
     status: 'pending' | 'approved' | 'rejected'; // Status of the transaction
     approvedBy?: number; // Admin who approved/rejected the transaction
     notes?: string;     // Optional notes from admin
+    amount?: string;    // Transaction amount
+    description?: string; // Transaction description or purpose
 }
 
 export async function saveTransactionSubmission(chatId: number, transactionId: string): Promise<void> {
@@ -230,6 +232,26 @@ export interface SupportMessage {
     isResponse: boolean; // Whether this is a response from admin
 }
 
+// Tutorial state system
+export interface TutorialState {
+    chatId: number;
+    currentStep: number;
+    started: number;
+    lastActivity: number;
+    completed: boolean;
+    skipped: boolean;
+}
+
+// Error reporting interface
+export interface ErrorReport {
+    type: string;
+    message: string;
+    timestamp: number;
+    userId?: number;
+    command?: string;
+    stack?: any;
+}
+
 export async function saveSupportMessage(message: SupportMessage): Promise<void> {
     await client.hSet('support_messages', message.id, JSON.stringify(message));
     // Also add to a user-specific list for quick lookup
@@ -256,6 +278,74 @@ export async function getSupportMessagesForUser(userId: number): Promise<Support
     
     // Sort by timestamp
     return messages.sort((a, b) => a.timestamp - b.timestamp);
+}
+
+// Alias for backward compatibility
+export const getSupportMessages = getSupportMessagesForUser;
+
+/**
+ * Save tutorial state for a user
+ * @param state Tutorial state data
+ */
+export async function saveTutorialState(state: TutorialState): Promise<void> {
+    await client.hSet('tutorial_progress', state.chatId.toString(), JSON.stringify(state));
+    
+    if (DEBUG) {
+        console.log(`[STORAGE] Saved tutorial state for user ${state.chatId}: Step ${state.currentStep}`);
+    }
+}
+
+/**
+ * Get tutorial state for a user
+ * @param chatId User's chat ID
+ * @returns Tutorial state or null if not found
+ */
+export async function getTutorialState(chatId: number): Promise<TutorialState | null> {
+    const data = await client.hGet('tutorial_progress', chatId.toString());
+    if (!data) return null;
+    
+    return JSON.parse(data) as TutorialState;
+}
+
+/**
+ * Save error report
+ * @param error Error report
+ */
+export async function saveErrorReport(error: ErrorReport): Promise<void> {
+    const id = `error_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    await client.hSet('error_reports', id, JSON.stringify(error));
+    
+    if (DEBUG) {
+        console.log(`[STORAGE] Saved error report: ${id} - ${error.message}`);
+    }
+}
+
+/**
+ * Get Redis client (for direct access in other modules)
+ */
+export function getRedisClient() {
+    return client;
+}
+
+/**
+ * Get analytics summary for admin dashboard
+ */
+export async function getAnalyticsSummary(): Promise<any> {
+    const allUsers = await getAllTrackedUsers();
+    const connectedUsers = await getAllConnectedUsers();
+    
+    return {
+        totalUsers: allUsers.length,
+        activeUsers: connectedUsers.length,
+        inactiveUsers: allUsers.length - connectedUsers.length,
+        userActivity: allUsers.map(user => ({
+            chatId: user.chatId,
+            displayName: user.displayName,
+            username: user.username,
+            lastActivity: user.lastActivity,
+            connected: !!user.walletAddress
+        }))
+    };
 }
 
 export class TonConnectStorage implements IStorage {

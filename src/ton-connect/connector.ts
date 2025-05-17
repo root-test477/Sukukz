@@ -1,6 +1,7 @@
 import TonConnect from '@tonconnect/sdk';
 import { TonConnectStorage } from './storage';
 import * as process from 'process';
+import { saveConnectedUser, removeConnectedUser } from './storage';
 
 const DEBUG = process.env.DEBUG_MODE === 'true';
 
@@ -105,4 +106,42 @@ export function getConnector(
     }
 
     return storedItem.connector;
+}
+
+/**
+ * Check if a wallet is connected for a chat ID
+ * @param chatId - The chat ID to check
+ * @returns The wallet address if connected, null otherwise
+ */
+export async function getConnectedWallet(chatId: number): Promise<string | null> {
+    const connector = getConnector(chatId);
+    const walletInfo = connector.wallet;
+    
+    if (connector.connected && walletInfo) {
+        return walletInfo.account.address;
+    }
+    
+    return null;
+}
+
+/**
+ * Disconnect a wallet for a chat ID
+ * @param chatId - The chat ID to disconnect
+ */
+export async function disconnectWallet(chatId: number): Promise<void> {
+    const connector = getConnector(chatId);
+    
+    try {
+        if (connector.connected) {
+            await connector.disconnect();
+        }
+        await removeConnectedUser(chatId);
+        
+        if (DEBUG) {
+            console.log(`[CONNECTOR] Disconnected wallet for chatId: ${chatId}`);
+        }
+    } catch (error) {
+        console.error(`[CONNECTOR] Error disconnecting wallet for chatId: ${chatId}:`, error);
+        throw error;
+    }
 }
