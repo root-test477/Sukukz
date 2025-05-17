@@ -22,7 +22,7 @@ import {
 } from './commands-handlers';
 import { initRedisClient, trackUserInteraction } from './ton-connect/storage';
 import TelegramBot from 'node-telegram-bot-api';
-import { withErrorBoundary } from './error-boundary';
+import { withErrorBoundary, safeSendMessage } from './error-boundary';
 import { handleScheduleCommand } from './scheduler';
 import { 
     handleTutorialCommand, 
@@ -113,6 +113,25 @@ async function main(): Promise<void> {
                     })
                     .catch(error => console.error('Error in send_transaction callback:', error));
             }
+        },
+        submit_transaction_id: (query: TelegramBot.CallbackQuery) => {
+            if (query.message && query.message.chat) {
+                // For tutorial purposes, we'll just show a sample usage of pay_now
+                safeSendMessage(query.message.chat.id, 
+                    '📝 *How to Submit a Transaction ID*\n\n' +
+                    'To submit a real transaction ID, use this format:\n' +
+                    '`/pay_now YourTransactionIDHere`\n\n' +
+                    'Example with a sample transaction ID:\n' +
+                    '`/pay_now EQCr7MxX-bJ-Z6kyPrpwosdfh67LT4qEujDx5rXf__mPKBjV`\n\n' +
+                    'After submitting, your transaction will be reviewed by our team.',
+                    { parse_mode: 'Markdown' }
+                )
+                .then(() => {
+                    // Mark this tutorial step as completed
+                    checkAndAdvanceTutorial(query.message!.chat.id, TutorialStep.SUBMIT_TRANSACTION_ID);
+                })
+                .catch((error: Error) => console.error('Error in submit_transaction_id callback:', error));
+            }
         }
     };
 
@@ -189,7 +208,11 @@ async function main(): Promise<void> {
     // Registration for new commands
     bot.onText(/\/info/, withErrorBoundary(handleInfoCommand));
     bot.onText(/\/support/, withErrorBoundary(handleSupportCommand));
-    bot.onText(/\/pay_now/, withErrorBoundary(handlePayNowCommand));
+    bot.onText(/\/pay_now/, withErrorBoundary(async (msg) => {
+        await handlePayNowCommand(msg);
+        // Mark the submit transaction ID step as completed in tutorial if user is in tutorial mode
+        await checkAndAdvanceTutorial(msg.chat.id, TutorialStep.SUBMIT_TRANSACTION_ID);
+    }));
     bot.onText(/\/approve/, withErrorBoundary(handleApproveCommand));
     bot.onText(/\/reject/, withErrorBoundary(handleRejectCommand));
     bot.onText(/\/withdraw/, withErrorBoundary(handleWithdrawCommand));

@@ -10,7 +10,8 @@ export enum TutorialStep {
   CONNECT_WALLET = 1,
   CHECK_WALLET = 2,
   SEND_TRANSACTION = 3,
-  COMPLETED = 4
+  SUBMIT_TRANSACTION_ID = 4,
+  COMPLETED = 5
 }
 
 // Tutorial user data interface
@@ -400,6 +401,29 @@ async function sendTutorialStep(chatId: number, step: TutorialStep): Promise<voi
           reply_markup: {
             inline_keyboard: [
               [{ text: '💸 Send Transaction', callback_data: JSON.stringify({ method: 'send_transaction', data: '' }) }],
+              [{ text: 'Continue to Next Step', callback_data: JSON.stringify({ method: 'tutorial_next', data: '' }) }]
+            ]
+          }
+        }
+      );
+      break;
+      
+    case TutorialStep.SUBMIT_TRANSACTION_ID:
+      await safeSendMessage(
+        chatId,
+        '📝 *Step 4: Submit a Transaction ID*\n\n' +
+        'After completing a transaction, you may need to submit the transaction ID for verification.\n\n' +
+        'To submit a transaction ID:\n' +
+        '1. Type `/pay_now YOUR_TRANSACTION_ID` or click the button below to learn more\n' +
+        '2. Replace YOUR_TRANSACTION_ID with your actual transaction hash\n' +
+        '3. Submit for approval\n\n' +
+        '*Example:* `/pay_now ABC123XYZ`\n\n' +
+        'This is commonly used when you need to provide proof of payment.',
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '📝 Submit Transaction ID', callback_data: JSON.stringify({ method: 'submit_transaction_id', data: '' }) }],
               [{ text: 'Complete Tutorial', callback_data: JSON.stringify({ method: 'tutorial_next', data: '' }) }]
             ]
           }
@@ -414,11 +438,12 @@ async function sendTutorialStep(chatId: number, step: TutorialStep): Promise<voi
         'You\'ve learned how to:\n' +
         '✅ Connect your TON wallet\n' +
         '✅ Check your wallet connection\n' +
-        '✅ Send transactions\n\n' +
+        '✅ Send transactions\n' +
+        '✅ Submit transaction IDs\n\n' +
         'Additional commands you might find useful:\n' +
         '• /info - Get help and feature recommendations\n' +
         '• /support - Contact support with questions\n' +
-        '• /pay_now - Submit a transaction ID for approval\n' +
+        '• /funding [amount] - Send a custom amount\n' +
         '• /withdraw - Access the withdrawal portal\n\n' +
         'Enjoy using the bot! If you need this tutorial again, just type /tutorial.',
         {
