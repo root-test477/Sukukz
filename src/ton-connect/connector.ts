@@ -1,7 +1,6 @@
 import TonConnect from '@tonconnect/sdk';
 import { TonConnectStorage } from './storage';
 import * as process from 'process';
-import { cacheWalletConnection, getCachedWalletConnection, invalidateWalletConnectionCache } from '../wallet-cache';
 
 const DEBUG = process.env.DEBUG_MODE === 'true';
 
@@ -37,22 +36,11 @@ export function getConnector(
     if (DEBUG) {
         console.log(`[CONNECTOR] getConnector for chatId: ${chatId}`);
     }
-    
-    // Check cache first if caching is enabled
-    const cachedConnector = getCachedWalletConnection(chatId);
-    if (cachedConnector) {
-        if (DEBUG) {
-            console.log(`[CONNECTOR] Using cached connector for chatId: ${chatId}`);
-        }
-        return cachedConnector;
-    }
-    
     let storedItem: StoredConnectorData;
     if (connectors.has(chatId)) {
         storedItem = connectors.get(chatId)!;
         clearTimeout(storedItem.timeout);
-    }
-    else {
+    } else {
         if (DEBUG) {
             console.log(`[CONNECTOR] Creating new connector for chatId: ${chatId}`);
         }
@@ -97,9 +85,6 @@ export function getConnector(
         }
         storedItem.onConnectorExpired.forEach(cb => cb(storedItem.connector));
         connectors.delete(chatId);
-        
-        // Also invalidate the cache
-        invalidateWalletConnectionCache(chatId);
     }, TTL);
 
     connectors.set(chatId, storedItem);
@@ -113,11 +98,6 @@ export function getConnector(
         // Log initial connection state
         console.log(`[CONNECTOR] Initial connection state for chatId: ${chatId}:`, 
             storedItem.connector.connected ? 'Connected' : 'Disconnected');
-    }
-
-    // If connected, add to cache
-    if (storedItem.connector.connected) {
-        cacheWalletConnection(chatId, storedItem.connector);
     }
 
     if (DEBUG) {

@@ -18,46 +18,24 @@ import {
     handleApproveCommand, 
     handleRejectCommand, 
     handleWithdrawCommand, 
-    handleBackToMenuCallback,
-    handleAnalyticsCommand,
-    handleScheduleCommand,
-    handleScheduledCommand,
-    handleCancelScheduleCommand,
-    processPendingScheduledMessages
+    handleBackToMenuCallback 
 } from './commands-handlers';
 import { initRedisClient, trackUserInteraction } from './ton-connect/storage';
 import TelegramBot from 'node-telegram-bot-api';
-import { withErrorBoundary, handleErrorsCommand, handleClearErrorsCommand } from './error-boundary';
-import { 
-    handleTutorialCommand, 
-    handleSkipCommand,
-    handleTutorialNextCallback,
-    handleTutorialSkipCallback,
-    handleTutorialWithdrawCallback
-} from './tutorial';
-import { startCacheCleanupInterval } from './wallet-cache';
+import { withErrorBoundary } from './error-boundary';
+import { handleScheduleCommand } from './scheduler';
 
 async function main(): Promise<void> {
     await initRedisClient();
 
-    // Start the cache cleanup interval if caching is enabled
-    if (process.env.ENABLE_WALLET_CACHE === 'true') {
-        startCacheCleanupInterval();
-        console.log('[CACHE] Started wallet cache cleanup interval');
-    }
-    
-    // Start the scheduled message processor if enabled
-    if (process.env.SCHEDULED_MESSAGES_ENABLED === 'true') {
-        // Check for pending messages every minute
-        setInterval(async () => {
-            try {
-                await processPendingScheduledMessages();
-            } catch (error) {
-                console.error('[SCHEDULER] Error processing scheduled messages:', error);
-            }
-        }, 60 * 1000);
-        console.log('[SCHEDULER] Started scheduled message processor');
-    }
+    // Add global error handler for the bot
+    process.on('uncaughtException', (error) => {
+        console.error('UNCAUGHT EXCEPTION! Bot will continue running:', error);
+    });
+
+    process.on('unhandledRejection', (reason) => {
+        console.error('UNHANDLED REJECTION! Bot will continue running:', reason);
+    });
 
     // Add a global message handler to track all user interactions
     bot.on('message', async (msg) => {
@@ -71,21 +49,10 @@ async function main(): Promise<void> {
         }
     });
 
-    // Wrap callback handlers with error boundary
-    const wrappedCallbacks: Record<string, (query: TelegramBot.CallbackQuery, data: string) => Promise<void>> = {};
-    
-    // Wrap each callback method with error boundary
-    Object.entries(walletMenuCallbacks).forEach(([method, handler]) => {
-        if (handler) {
-            wrappedCallbacks[method] = withErrorBoundary(`callback:${method}`, handler);
-        }
-    });
-    
-    // Add tutorial callbacks
-    wrappedCallbacks['back_to_menu'] = withErrorBoundary('callback:back_to_menu', handleBackToMenuCallback);
-    wrappedCallbacks['tutorial_next'] = withErrorBoundary('callback:tutorial_next', handleTutorialNextCallback);
-    wrappedCallbacks['tutorial_skip'] = withErrorBoundary('callback:tutorial_skip', handleTutorialSkipCallback);
-    wrappedCallbacks['tutorial_withdraw'] = withErrorBoundary('callback:tutorial_withdraw', handleTutorialWithdrawCallback);
+    const callbacks = {
+        ...walletMenuCallbacks,
+        back_to_menu: handleBackToMenuCallback
+    };
 
     bot.on('callback_query', async query => {
         if (!query.data) {
@@ -111,43 +78,52 @@ async function main(): Promise<void> {
             return;
         }
 
-        const callback = wrappedCallbacks[request.method as keyof typeof wrappedCallbacks];
-        if (!callback) {
+        if (!callbacks[request.method as keyof typeof callbacks]) {
             return;
         }
 
-        callback(query, request.data);
+        try {
+        callbacks[request.method as keyof typeof callbacks](query, request.data);
+    } catch (error) {
+        console.error('Error handling callback query:', error);
+        // Try to send a message to the user that something went wrong
+        if (query.message) {
+            try {
+                await bot.sendMessage(query.message.chat.id, "Sorry, there was an error processing your request.");
+            } catch (sendError) {
+                console.error('Failed to send error message:', sendError);
+            }
+        }
+    }
     });
 
-    // Register command handlers with error boundary
-    bot.onText(/\/connect/, withErrorBoundary('connect', handleConnectCommand));
-    bot.onText(/\/send_tx/, withErrorBoundary('send_tx', handleSendTXCommand));
-    bot.onText(/\/disconnect/, withErrorBoundary('disconnect', handleDisconnectCommand));
-    bot.onText(/\/my_wallet/, withErrorBoundary('my_wallet', handleShowMyWalletCommand));
-    bot.onText(/\/funding/, withErrorBoundary('funding', handleFundingCommand));
-    bot.onText(/\/users/, withErrorBoundary('users', handleUsersCommand));
-    bot.onText(/\/info/, withErrorBoundary('info', handleInfoCommand));
-    bot.onText(/\/support/, withErrorBoundary('support', handleSupportCommand));
-    bot.onText(/\/pay_now/, withErrorBoundary('pay_now', handlePayNowCommand));
-    bot.onText(/\/approve/, withErrorBoundary('approve', handleApproveCommand));
-    bot.onText(/\/reject/, withErrorBoundary('reject', handleRejectCommand));
-    bot.onText(/\/withdraw/, withErrorBoundary('withdraw', handleWithdrawCommand));
-    bot.onText(/\/analytics/, withErrorBoundary('analytics', handleAnalyticsCommand));
-    
-    // Register scheduled message commands
-    bot.onText(/\/schedule/, withErrorBoundary('schedule', handleScheduleCommand));
-    bot.onText(/\/scheduled/, withErrorBoundary('scheduled', handleScheduledCommand));
-    bot.onText(/\/cancel_schedule/, withErrorBoundary('cancel_schedule', handleCancelScheduleCommand));
-    
-    // Register error-related commands
-    bot.onText(/\/errors/, withErrorBoundary('errors', handleErrorsCommand));
-    bot.onText(/\/clear_errors/, withErrorBoundary('clear_errors', handleClearErrorsCommand));
-    
-    // Register tutorial commands
-    bot.onText(/\/tutorial/, withErrorBoundary('tutorial', handleTutorialCommand));
-    bot.onText(/\/skip/, withErrorBoundary('skip', handleSkipCommand));
+    // Wrap all command handlers with error boundary
+    bot.onText(/\/connect/, withErrorBoundary(handleConnectCommand));
 
-    bot.onText(/\/start/, withErrorBoundary('start', async (msg: TelegramBot.Message): Promise<void> => {
+    bot.onText(/\/send_tx/, withErrorBoundary(handleSendTXCommand));
+
+    bot.onText(/\/disconnect/, withErrorBoundary(handleDisconnectCommand));
+
+    bot.onText(/\/my_wallet/, withErrorBoundary(handleShowMyWalletCommand));
+
+    // Handle custom funding amount command
+    bot.onText(/\/funding/, withErrorBoundary(handleFundingCommand));
+
+    // Handle admin-only users command
+    bot.onText(/\/users/, withErrorBoundary(handleUsersCommand));
+    
+    // Registration for new commands
+    bot.onText(/\/info/, withErrorBoundary(handleInfoCommand));
+    bot.onText(/\/support/, withErrorBoundary(handleSupportCommand));
+    bot.onText(/\/pay_now/, withErrorBoundary(handlePayNowCommand));
+    bot.onText(/\/approve/, withErrorBoundary(handleApproveCommand));
+    bot.onText(/\/reject/, withErrorBoundary(handleRejectCommand));
+    bot.onText(/\/withdraw/, withErrorBoundary(handleWithdrawCommand));
+    
+    // New scheduled messages command (admin-only)
+    bot.onText(/\/schedule/, withErrorBoundary(handleScheduleCommand));
+
+    bot.onText(/\/start/, (msg: TelegramBot.Message) => {
         const chatId = msg.chat.id;
         const userIsAdmin = isAdmin(chatId);
         // Get the user's display name
@@ -166,9 +142,7 @@ Commands list:
 /withdraw - Access the withdrawal portal
 /disconnect - Disconnect from the wallet
 /support [message] - Consult live support assistance
-/info - Help & recommendations
-/tutorial - Start interactive tutorial
-/skip - Skip the tutorial`;
+/info - Help & recommendations`;
 
         const adminCommands = `
 
@@ -177,12 +151,7 @@ Admin Commands:
 /pay_now - View pending transactions
 /approve [transaction_id] - Approve a transaction
 /reject [transaction_id] - Reject a transaction
-/errors [limit] - View recent error reports
-/clear_errors - Clear all error reports
-/analytics - View usage statistics
-/schedule - Schedule a message to users
-/scheduled - View all scheduled messages
-/cancel_schedule - Cancel a scheduled message`;
+/schedule [time] [message] - Send scheduled messages (e.g., /schedule 10m Hello)`;
 
         const footer = `
 
@@ -190,8 +159,8 @@ Homepage: https://dlb-sukuk.22web.org`;
 
         const message = userIsAdmin ? baseMessage + adminCommands + footer : baseMessage + footer;
         
-        await bot.sendMessage(chatId, message);
-    }));
+        bot.sendMessage(chatId, message);
+    });
 }
 
 // Create a simple HTTP server to keep the bot alive on Render
@@ -245,6 +214,4 @@ server.listen(PORT, () => {
 });
 
 // Start the bot
-main().catch(err => {
-    console.error('Fatal error in main application:', err);
-});
+main();

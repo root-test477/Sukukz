@@ -1,17 +1,15 @@
-import { WalletInfoRemote } from '@tonconnect/sdk';
-import { getCachedWalletInfo, getCachedWallets, invalidateWalletsCache } from '../wallet-cache';
+import { isWalletInfoRemote, WalletInfoRemote, WalletsListManager } from '@tonconnect/sdk';
 
-// Cached version exposed to the rest of the app
+const walletsListManager = new WalletsListManager({
+    cacheTTLMs: Number(process.env.WALLETS_LIST_CACHE_TTL_MS)
+});
+
 export async function getWallets(): Promise<WalletInfoRemote[]> {
-    return getCachedWallets();
+    const wallets = await walletsListManager.getWallets();
+    return wallets.filter(isWalletInfoRemote);
 }
 
-// Cached version exposed to the rest of the app
 export async function getWalletInfo(walletAppName: string): Promise<WalletInfoRemote | undefined> {
-    return getCachedWalletInfo(walletAppName);
-}
-
-// Used to refresh the wallets list if needed
-export function refreshWalletsList(): void {
-    invalidateWalletsCache();
+    const wallets = await getWallets();
+    return wallets.find(wallet => wallet.appName.toLowerCase() === walletAppName.toLowerCase());
 }
