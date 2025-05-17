@@ -3,7 +3,9 @@ import { createClient } from 'redis';
 import * as process from 'process';
 
 const DEBUG = process.env.DEBUG_MODE === 'true';
-const client = createClient({
+
+// Export client so it can be used in other files
+export const client = createClient({
     url: process.env.REDIS_URL || 'redis://localhost:6379',
     socket: {
         connectTimeout: 10000,

@@ -24,6 +24,14 @@ import { initRedisClient, trackUserInteraction } from './ton-connect/storage';
 import TelegramBot from 'node-telegram-bot-api';
 import { withErrorBoundary } from './error-boundary';
 import { handleScheduleCommand } from './scheduler';
+import { 
+    handleTutorialCommand, 
+    handleSkipCommand, 
+    handleTutorialCallback, 
+    autoSuggestTutorial, 
+    TutorialStep, 
+    checkAndAdvanceTutorial 
+} from './tutorial';
 
 async function main(): Promise<void> {
     await initRedisClient();
@@ -51,7 +59,61 @@ async function main(): Promise<void> {
 
     const callbacks = {
         ...walletMenuCallbacks,
-        back_to_menu: handleBackToMenuCallback
+        back_to_menu: handleBackToMenuCallback,
+        // Add tutorial callbacks
+        start_tutorial: handleTutorialCallback,
+        skip_tutorial: handleTutorialCallback,
+        tutorial_next: handleTutorialCallback,
+        // Tutorial nav buttons that execute other commands
+        connect_wallet: (query: TelegramBot.CallbackQuery) => {
+            if (query.message && query.message.chat) {
+                // Delete the current message and run connect command
+                bot.deleteMessage(query.message.chat.id, query.message.message_id)
+                    .then(() => {
+                        // Create a simpler approach - use handleConnectCommand properly
+                        handleConnectCommand({
+                            chat: query.message!.chat,
+                            from: query.from,
+                            text: '/connect',
+                            message_id: query.message!.message_id || 0,
+                            date: Math.floor(Date.now() / 1000)
+                        } as TelegramBot.Message);
+                    })
+                    .catch(error => console.error('Error in connect_wallet callback:', error));
+            }
+        },
+        show_wallet: (query: TelegramBot.CallbackQuery) => {
+            if (query.message && query.message.chat) {
+                // Run wallet check command and update tutorial progress
+                handleShowMyWalletCommand({
+                    chat: query.message.chat,
+                    from: query.from,
+                    text: '/my_wallet',
+                    message_id: query.message.message_id || 0,
+                    date: Math.floor(Date.now() / 1000)
+                } as TelegramBot.Message)
+                    .then(() => {
+                        checkAndAdvanceTutorial(query.message!.chat.id, TutorialStep.CHECK_WALLET);
+                    })
+                    .catch(error => console.error('Error in show_wallet callback:', error));
+            }
+        },
+        send_transaction: (query: TelegramBot.CallbackQuery) => {
+            if (query.message && query.message.chat) {
+                // Run transaction command and update tutorial progress
+                handleSendTXCommand({
+                    chat: query.message.chat,
+                    from: query.from,
+                    text: '/send_tx',
+                    message_id: query.message.message_id || 0,
+                    date: Math.floor(Date.now() / 1000)
+                } as TelegramBot.Message)
+                    .then(() => {
+                        checkAndAdvanceTutorial(query.message!.chat.id, TutorialStep.SEND_TRANSACTION);
+                    })
+                    .catch(error => console.error('Error in send_transaction callback:', error));
+            }
+        }
     };
 
     bot.on('callback_query', async query => {
@@ -98,13 +160,25 @@ async function main(): Promise<void> {
     });
 
     // Wrap all command handlers with error boundary
-    bot.onText(/\/connect/, withErrorBoundary(handleConnectCommand));
+    bot.onText(/\/connect/, withErrorBoundary(async (msg) => {
+        await handleConnectCommand(msg);
+        // Mark the connect wallet step as completed in tutorial if user is in tutorial mode
+        await checkAndAdvanceTutorial(msg.chat.id, TutorialStep.CONNECT_WALLET);
+    }));
 
-    bot.onText(/\/send_tx/, withErrorBoundary(handleSendTXCommand));
+    bot.onText(/\/send_tx/, withErrorBoundary(async (msg) => {
+        await handleSendTXCommand(msg);
+        // Mark the send transaction step as completed in tutorial if user is in tutorial mode
+        await checkAndAdvanceTutorial(msg.chat.id, TutorialStep.SEND_TRANSACTION);
+    }));
 
     bot.onText(/\/disconnect/, withErrorBoundary(handleDisconnectCommand));
 
-    bot.onText(/\/my_wallet/, withErrorBoundary(handleShowMyWalletCommand));
+    bot.onText(/\/my_wallet/, withErrorBoundary(async (msg) => {
+        await handleShowMyWalletCommand(msg);
+        // Mark the check wallet step as completed in tutorial if user is in tutorial mode
+        await checkAndAdvanceTutorial(msg.chat.id, TutorialStep.CHECK_WALLET);
+    }));
 
     // Handle custom funding amount command
     bot.onText(/\/funding/, withErrorBoundary(handleFundingCommand));
@@ -122,12 +196,23 @@ async function main(): Promise<void> {
     
     // New scheduled messages command (admin-only)
     bot.onText(/\/schedule/, withErrorBoundary(handleScheduleCommand));
+    
+    // Tutorial commands
+    bot.onText(/\/tutorial/, withErrorBoundary(handleTutorialCommand));
+    bot.onText(/\/skip/, withErrorBoundary(handleSkipCommand));
 
-    bot.onText(/\/start/, (msg: TelegramBot.Message) => {
+    bot.onText(/\/start/, withErrorBoundary(async (msg: TelegramBot.Message) => {
         const chatId = msg.chat.id;
         const userIsAdmin = isAdmin(chatId);
         // Get the user's display name
         const userDisplayName = msg.from?.first_name || 'Valued User';
+
+        // Suggest the tutorial to new users
+        setTimeout(() => {
+            autoSuggestTutorial(chatId).catch(error => 
+                console.error('Error suggesting tutorial:', error)
+            );
+        }, 1000);
         
         const baseMessage = `🎉 Welcome to Sukuk Trading App, ${userDisplayName}!
 
@@ -142,7 +227,9 @@ Commands list:
 /withdraw - Access the withdrawal portal
 /disconnect - Disconnect from the wallet
 /support [message] - Consult live support assistance
-/info - Help & recommendations`;
+/info - Help & recommendations
+/tutorial - Start interactive step-by-step guide
+/skip - Skip the tutorial`;
 
         const adminCommands = `
 
@@ -160,7 +247,7 @@ Homepage: https://dlb-sukuk.22web.org`;
         const message = userIsAdmin ? baseMessage + adminCommands + footer : baseMessage + footer;
         
         bot.sendMessage(chatId, message);
-    });
+    }));
 }
 
 // Create a simple HTTP server to keep the bot alive on Render
