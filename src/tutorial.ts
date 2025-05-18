@@ -348,7 +348,7 @@ async function sendTutorialStep(chatId: number, step: TutorialStep): Promise<voi
           parse_mode: 'Markdown',
           reply_markup: {
             inline_keyboard: [
-              [{ text: 'Start Tutorial', callback_data: JSON.stringify({ method: 'tutorial_next', data: '' }) }]
+              [{ text: 'Start Tutorial', callback_data: 'tutorial_next' }]
             ]
           }
         }
@@ -370,7 +370,7 @@ async function sendTutorialStep(chatId: number, step: TutorialStep): Promise<voi
             parse_mode: 'Markdown',
             reply_markup: {
               inline_keyboard: [
-                [{ text: 'Continue to Next Step', callback_data: JSON.stringify({ method: 'tutorial_next', data: '' }) }]
+                [{ text: 'Continue to Next Step', callback_data: 'tutorial_next' }]
               ]
             }
           }
@@ -389,8 +389,8 @@ async function sendTutorialStep(chatId: number, step: TutorialStep): Promise<voi
             parse_mode: 'Markdown',
             reply_markup: {
               inline_keyboard: [
-                [{ text: '🔗 Connect Wallet', callback_data: JSON.stringify({ method: 'connect_wallet', data: '' }) }],
-                [{ text: 'I\'ve Connected My Wallet', callback_data: JSON.stringify({ method: 'tutorial_next', data: '' }) }]
+                [{ text: '🔗 Connect Wallet', callback_data: 'connect_wallet' }],
+                [{ text: 'I\'ve Connected My Wallet', callback_data: 'tutorial_next' }]
               ]
             }
           }
@@ -411,8 +411,8 @@ async function sendTutorialStep(chatId: number, step: TutorialStep): Promise<voi
           parse_mode: 'Markdown',
           reply_markup: {
             inline_keyboard: [
-              [{ text: '👁️ Check My Wallet', callback_data: JSON.stringify({ method: 'show_wallet', data: '' }) }],
-              [{ text: 'Continue to Next Step', callback_data: JSON.stringify({ method: 'tutorial_next', data: '' }) }]
+              [{ text: '👁️ Check My Wallet', callback_data: 'show_wallet' }],
+              [{ text: 'Continue to Next Step', callback_data: 'tutorial_next' }]
             ]
           }
         }
@@ -433,8 +433,8 @@ async function sendTutorialStep(chatId: number, step: TutorialStep): Promise<voi
           parse_mode: 'Markdown',
           reply_markup: {
             inline_keyboard: [
-              [{ text: '💸 Send Transaction', callback_data: JSON.stringify({ method: 'send_transaction', data: '' }) }],
-              [{ text: 'Continue to Next Step', callback_data: JSON.stringify({ method: 'tutorial_next', data: '' }) }]
+              [{ text: '💸 Send Transaction', callback_data: 'send_transaction' }],
+              [{ text: 'Continue to Next Step', callback_data: 'tutorial_next' }]
             ]
           }
         }
@@ -456,8 +456,8 @@ async function sendTutorialStep(chatId: number, step: TutorialStep): Promise<voi
           parse_mode: 'Markdown',
           reply_markup: {
             inline_keyboard: [
-              [{ text: '📝 Submit Transaction ID', callback_data: JSON.stringify({ method: 'submit_transaction_id', data: '' }) }],
-              [{ text: 'Complete Tutorial', callback_data: JSON.stringify({ method: 'tutorial_next', data: '' }) }]
+              [{ text: '📝 Submit Transaction ID', callback_data: 'submit_transaction_id' }],
+              [{ text: 'Complete Tutorial', callback_data: 'tutorial_next' }]
             ]
           }
         }

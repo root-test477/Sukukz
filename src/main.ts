@@ -151,39 +151,46 @@ async function main(): Promise<void> {
             }
         }
 
-        let request: { method: string; data: string };
-
         try {
-            // Add more console logging to troubleshoot
             console.log(`[CALLBACK] Processing callback data: ${query.data}`);
-            request = JSON.parse(query.data);
-            console.log(`[CALLBACK] Parsed request:`, request);
-        } catch (parseError) {
-            console.error(`[CALLBACK] Error parsing callback data:`, parseError);
-            return;
-        }
-
-        // Check if the method exists in our callbacks
-        if (!callbacks[request.method as keyof typeof callbacks]) {
-            console.error(`[CALLBACK] No handler found for method: ${request.method}`);
-            return;
-        }
-
-        // Call the callback handler with the request data
-        try {
-            console.log(`[CALLBACK] Executing handler for method: ${request.method}`);
-            callbacks[request.method as keyof typeof callbacks](query, request.data);
-    } catch (error) {
-        console.error('Error handling callback query:', error);
-        // Try to send a message to the user that something went wrong
-        if (query.message) {
+            
+            // Check if the callback data is a direct method name
+            if (callbacks[query.data as keyof typeof callbacks]) {
+                // Direct method name (e.g., 'start_tutorial')
+                console.log(`[CALLBACK] Direct callback method: ${query.data}`);
+                callbacks[query.data as keyof typeof callbacks](query, '');
+                return;
+            }
+            
+            // Try to parse as JSON
             try {
-                await bot.sendMessage(query.message.chat.id, "Sorry, there was an error processing your request.");
-            } catch (sendError) {
-                console.error('Failed to send error message:', sendError);
+                const request = JSON.parse(query.data);
+                console.log(`[CALLBACK] Parsed JSON request:`, request);
+                
+                // Check if the method exists in our callbacks
+                if (!callbacks[request.method as keyof typeof callbacks]) {
+                    console.error(`[CALLBACK] No handler found for method: ${request.method}`);
+                    return;
+                }
+                
+                // Execute the callback handler
+                console.log(`[CALLBACK] Executing handler for method: ${request.method}`);
+                callbacks[request.method as keyof typeof callbacks](query, request.data || '');
+            } catch (parseError) {
+                console.error(`[CALLBACK] Error parsing callback data:`, parseError);
+                console.log(`[CALLBACK] Unrecognized callback format: ${query.data}`);
+            }
+        } catch (error) {
+            console.error('Error handling callback query:', error);
+            // Try to send a message to the user that something went wrong
+            if (query.message) {
+                try {
+                    await bot.sendMessage(query.message.chat.id, "Sorry, there was an error processing your request.");
+                } catch (sendError) {
+                    console.error('Failed to send error message:', sendError);
+                }
             }
         }
-    }
     });
 
     // Wrap all command handlers with error boundary
