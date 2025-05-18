@@ -177,9 +177,30 @@ export async function handleTutorialCommand(msg: TelegramBot.Message): Promise<v
   const chatId = msg.chat.id;
   
   try {
-    // Start or resume the tutorial
-    const currentStep = await TutorialManager.startOrResumeTutorial(chatId);
-    await sendTutorialStep(chatId, currentStep);
+    console.log(`[TUTORIAL] User ${chatId} requested tutorial via command`);
+    // First check if there's an existing tutorial in progress
+    const progress = await TutorialManager.getTutorialProgress(chatId);
+    
+    if (progress && progress.currentStep > TutorialStep.WELCOME && !progress.completed) {
+      // There's a tutorial in progress, resume from the current step
+      console.log(`[TUTORIAL] Resuming tutorial for user ${chatId} at step ${progress.currentStep}`);
+      await sendTutorialStep(chatId, progress.currentStep);
+    } else {
+      // Start from the beginning
+      await safeSendMessage(
+        chatId,
+        '👩‍🏫 *Welcome to the Interactive Tutorial!*\n\nThis tutorial will guide you through the main features of the bot, step by step.\n\nClick the button below to start.',
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [[
+              { text: 'Start Tutorial', callback_data: 'start_tutorial' }
+            ]]
+          }
+        }
+      );
+      console.log(`[TUTORIAL] Sent welcome message to user ${chatId}`);
+    }
   } catch (error) {
     console.error('Error handling tutorial command:', error);
     await safeSendMessage(chatId, '❌ Sorry, there was an error starting the tutorial. Please try again later.');
@@ -236,20 +257,22 @@ export async function autoSuggestTutorial(chatId: number): Promise<void> {
   try {
     const shouldSuggest = await TutorialManager.shouldSuggestTutorial(chatId);
     if (shouldSuggest) {
+      console.log(`[TUTORIAL] Suggesting tutorial to user ${chatId}`);
       await safeSendMessage(
         chatId,
-        '🎓 Would you like to take a quick tutorial to learn how to use this bot?\n\nType /tutorial to start or /skip to dismiss.',
+        '👩‍🏫 Would you like to take a quick tutorial to learn how to use this bot?\n\nType /tutorial to start or /skip to dismiss.',
         {
           reply_markup: {
             inline_keyboard: [
               [
-                { text: '🎓 Start Tutorial', callback_data: JSON.stringify({ method: 'start_tutorial', data: '' }) },
-                { text: '⏭️ Skip for Now', callback_data: JSON.stringify({ method: 'skip_tutorial', data: '' }) }
+                { text: '👩‍🏫 Start Tutorial', callback_data: 'start_tutorial' },
+                { text: '⏭️ Skip for Now', callback_data: 'skip_tutorial' }
               ]
             ]
           }
         }
       );
+      console.log(`[TUTORIAL] Tutorial suggestion sent to user ${chatId}`);
     }
   } catch (error) {
     console.error('Error suggesting tutorial:', error);
@@ -259,20 +282,29 @@ export async function autoSuggestTutorial(chatId: number): Promise<void> {
 /**
  * Handle tutorial callbacks
  * @param query Callback query
+ * @param data Additional data from the callback
  */
-export async function handleTutorialCallback(query: TelegramBot.CallbackQuery, _data: string): Promise<void> {
+export async function handleTutorialCallback(query: TelegramBot.CallbackQuery, data: string): Promise<void> {
   if (!query.message) return;
   
   const chatId = query.message.chat.id;
+  const method = query.data ? JSON.parse(query.data).method : '';
+  
+  console.log(`[TUTORIAL] Handling callback: ${method}, chatId: ${chatId}`);
   
   try {
-    if (query.data === 'start_tutorial') {
+    // Extract the method from either the parsed JSON or from the callback method parameter
+    const callbackMethod = method || data;
+    
+    if (callbackMethod === 'start_tutorial') {
       // Start the tutorial
+      console.log(`[TUTORIAL] Starting tutorial for user ${chatId}`);
       const currentStep = await TutorialManager.startOrResumeTutorial(chatId);
       await bot.deleteMessage(chatId, query.message.message_id);
       await sendTutorialStep(chatId, currentStep);
-    } else if (query.data === 'skip_tutorial') {
+    } else if (callbackMethod === 'skip_tutorial') {
       // Skip the tutorial
+      console.log(`[TUTORIAL] Skipping tutorial for user ${chatId}`);
       await TutorialManager.skipTutorial(chatId);
       await bot.editMessageText(
         '✅ Tutorial skipped. You can resume it anytime by typing /tutorial.',
@@ -281,8 +313,9 @@ export async function handleTutorialCallback(query: TelegramBot.CallbackQuery, _
           message_id: query.message.message_id
         }
       );
-    } else if (query.data === 'tutorial_next') {
+    } else if (callbackMethod === 'tutorial_next') {
       // Advance to next step manually
+      console.log(`[TUTORIAL] Advancing to next step for user ${chatId}`);
       const nextStep = await TutorialManager.advanceToNextStep(chatId);
       if (nextStep !== null) {
         await bot.deleteMessage(chatId, query.message.message_id);

@@ -61,9 +61,9 @@ async function main(): Promise<void> {
         ...walletMenuCallbacks,
         back_to_menu: handleBackToMenuCallback,
         // Add tutorial callbacks
-        start_tutorial: handleTutorialCallback,
-        skip_tutorial: handleTutorialCallback,
-        tutorial_next: handleTutorialCallback,
+        start_tutorial: (query) => handleTutorialCallback(query, 'start_tutorial'),
+        skip_tutorial: (query) => handleTutorialCallback(query, 'skip_tutorial'),
+        tutorial_next: (query) => handleTutorialCallback(query, 'tutorial_next'),
         // Tutorial nav buttons that execute other commands
         connect_wallet: (query: TelegramBot.CallbackQuery) => {
             if (query.message && query.message.chat) {
@@ -154,17 +154,25 @@ async function main(): Promise<void> {
         let request: { method: string; data: string };
 
         try {
+            // Add more console logging to troubleshoot
+            console.log(`[CALLBACK] Processing callback data: ${query.data}`);
             request = JSON.parse(query.data);
-        } catch {
+            console.log(`[CALLBACK] Parsed request:`, request);
+        } catch (parseError) {
+            console.error(`[CALLBACK] Error parsing callback data:`, parseError);
             return;
         }
 
+        // Check if the method exists in our callbacks
         if (!callbacks[request.method as keyof typeof callbacks]) {
+            console.error(`[CALLBACK] No handler found for method: ${request.method}`);
             return;
         }
 
+        // Call the callback handler with the request data
         try {
-        callbacks[request.method as keyof typeof callbacks](query, request.data);
+            console.log(`[CALLBACK] Executing handler for method: ${request.method}`);
+            callbacks[request.method as keyof typeof callbacks](query, request.data);
     } catch (error) {
         console.error('Error handling callback query:', error);
         // Try to send a message to the user that something went wrong
