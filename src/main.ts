@@ -158,7 +158,15 @@ async function main(): Promise<void> {
             if (callbacks[query.data as keyof typeof callbacks]) {
                 // Direct method name (e.g., 'start_tutorial')
                 console.log(`[CALLBACK] Direct callback method: ${query.data}`);
-                callbacks[query.data as keyof typeof callbacks](query, '');
+                try {
+                    callbacks[query.data as keyof typeof callbacks](query, '');
+                } catch (error) {
+                    console.error(`[CALLBACK] Error processing direct callback method: ${query.data}`, error);
+                    // Try to send an error message to the user
+                    if (query.message) {
+                        await bot.sendMessage(query.message.chat.id, "Sorry, there was an error processing your request.");
+                    }
+                }
                 return;
             }
             

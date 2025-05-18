@@ -288,12 +288,28 @@ export async function handleTutorialCallback(query: TelegramBot.CallbackQuery, d
   if (!query.message) return;
   
   const chatId = query.message.chat.id;
-  const method = query.data ? JSON.parse(query.data).method : '';
+  let method = '';
   
-  console.log(`[TUTORIAL] Handling callback: ${method}, chatId: ${chatId}`);
+  // Handle both direct string and JSON formats
+  try {
+    if (query.data) {
+      // Try to parse as JSON first
+      try {
+        const parsed = JSON.parse(query.data);
+        method = parsed.method;
+      } catch (parseError) {
+        // If parsing fails, assume it's a direct method string
+        method = query.data;
+      }
+    }
+  } catch (error) {
+    console.error(`[TUTORIAL] Error processing callback data:`, error);
+  }
+  
+  console.log(`[TUTORIAL] Handling callback: ${method || data}, chatId: ${chatId}`);
   
   try {
-    // Extract the method from either the parsed JSON or from the callback method parameter
+    // Extract the method from either query.data or the callback method parameter
     const callbackMethod = method || data;
     
     if (callbackMethod === 'start_tutorial') {
