@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import http from 'http';
-import { bot } from './bot';
+import { bot, setupBotCommunication, isWebhookPath, handleWebhookRequest } from './bot';
 import { walletMenuCallbacks } from './connect-wallet-menu';
 import { isAdmin } from './utils';
 import { 
@@ -163,8 +163,33 @@ Homepage: https://dlb-sukuk.22web.org`;
     });
 }
 
-// Create a simple HTTP server to keep the bot alive on Render
-const server = http.createServer((req, res) => {
+// Create an HTTP server for both webhooks and serving static content
+const server = http.createServer(async (req, res) => {
+    // Check if this is a webhook request
+    const { isWebhook, botId } = isWebhookPath(req.url || '');
+    
+    if (isWebhook && botId && req.method === 'POST') {
+        // Handle webhook request
+        let body = '';
+        req.on('data', (chunk) => {
+            body += chunk.toString();
+        });
+        
+        req.on('end', () => {
+            try {
+                const update = JSON.parse(body);
+                const success = handleWebhookRequest(botId, update);
+                
+                res.writeHead(success ? 200 : 404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success }));
+            } catch (error) {
+                console.error('Error processing webhook:', error);
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Internal server error' }));
+            }
+        });
+        return;
+    }
     // Serve the manifest file directly from the app with CORS headers
     if (req.url === '/tonconnect-manifest.json') {
         res.writeHead(200, { 
@@ -213,5 +238,6 @@ server.listen(PORT, () => {
     console.log(`HTTP server running on port ${PORT}`);
 });
 
-// Start the bot
+// Start the bot and setup communication (webhooks or polling)
 main();
+setupBotCommunication();

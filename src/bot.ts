@@ -8,14 +8,30 @@ interface BotInstance {
   name: string;
 }
 
-// Global polling configuration
+// Global configuration
 const DEBUG = process.env.DEBUG_MODE === 'true';
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+
+// Get the port from environment variable or use 10000 as default
+const PORT = process.env.PORT || 10000;
+
+// Build the webhook URL based on the environment
+// In production, we'll use the render.com URL
+// In development, we can use ngrok or a similar tool
+const BASE_URL = process.env.PUBLIC_URL || `https://telegram-bot-demo.onrender.com`;
+
+// IMPORTANT: Using a single shared webhook endpoint for all bots
+const WEBHOOK_PATH = '/webhook';
 
 // Get primary bot token (backwards compatibility)
 const primaryToken = process.env.TELEGRAM_BOT_TOKEN!;
 
-// Create the primary bot instance with polling mode
-export const bot = new TelegramBot(primaryToken, { polling: true });
+// Create the primary bot instance - NO POLLING IN PRODUCTION
+const botOptions = IS_PRODUCTION
+  ? { polling: false } // No polling in production, we'll use webhooks
+  : { polling: true };  // Use polling in development for easier testing
+
+export const bot = new TelegramBot(primaryToken, botOptions);
 
 // Map to store all bot instances
 export const bots = new Map<string, BotInstance>();
@@ -51,7 +67,8 @@ function initAdditionalBots() {
         const botName = envVars[nameKey] || `Bot ${botId}`;
         
         try {
-          // Create new bot instance WITHOUT polling (we'll use the API instead)
+          // Always create bot instances without polling
+          // We'll either use webhooks in production or enable polling manually in development
           const newBot = new TelegramBot(token, { polling: false });
           
           // Store in the map
@@ -73,98 +90,43 @@ function initAdditionalBots() {
 // Initialize additional bots from environment variables
 initAdditionalBots();
 
-// Set up manual polling for additional bots
-function manualPollAdditionalBots() {
-  // Skip the primary bot since it's already polling
-  const additionalBots = Array.from(bots.entries())
-    .filter(([id, _]) => id !== 'primary');
-
-  if (additionalBots.length === 0) return;
-
-  // Process function to handle updates - NOTE: This function is no longer used
-  // but kept for reference purposes
-  async function processBot(botId: string, botInstance: BotInstance) {
-    try {
-      const updates = await botInstance.bot.getUpdates();
-      
-      if (updates && updates.length > 0) {
-        // Process each update
-        for (const update of updates) {
-          // Manually emit events based on update type
-          if (update.message) {
-            botInstance.bot.processUpdate(update);
-          } else if (update.callback_query) {
-            botInstance.bot.processUpdate(update);
-          } else if (update.inline_query) {
-            botInstance.bot.processUpdate(update);
-          }
-        }
-        
-        // Acknowledge updates by getting updates with higher offset
-        if (updates.length > 0) {
-          const lastUpdate = updates[updates.length - 1];
-          if (lastUpdate && lastUpdate.update_id) {
-            await botInstance.bot.getUpdates({ offset: lastUpdate.update_id + 1 });
-          }
-        }
-      }
-    } catch (error) {
-      console.error(`Error polling updates for bot ${botId}:`, error);
-    }
-  }
-
-  // Enable manual polling for additional bots
-  // Each bot polls independently to avoid conflicts
-  // The offset parameter ensures we don't process the same updates multiple times
-  
-  // Initialize offset tracking for each bot
-  const offsetMap = new Map<string, number>();
-  
-  // Poll each bot every few seconds
-  for (const [botId, botInstance] of additionalBots) {
-    // Start with offset 0 for each bot
-    offsetMap.set(botId, 0);
-    
-    // Set up polling interval
-    setInterval(async () => {
-      try {
-        // Get current offset for this bot
-        const currentOffset = offsetMap.get(botId) || 0;
-        
-        // Get updates with the current offset
-        const updates = await botInstance.bot.getUpdates({ 
-          offset: currentOffset,
-          timeout: 1 // Short timeout to avoid blocking
-        });
-        
-        if (updates && updates.length > 0) {
-          // Process each update
-          for (const update of updates) {
-            botInstance.bot.processUpdate(update);
-          }
-          
-          // Update offset to highest update_id + 1
-          const lastUpdate = updates[updates.length - 1];
-          if (lastUpdate && lastUpdate.update_id) {
-            const newOffset = lastUpdate.update_id + 1;
-            offsetMap.set(botId, newOffset);
-            
-            if (DEBUG) {
-              console.log(`Bot ${botId} processed ${updates.length} updates, new offset: ${newOffset}`);
-            }
-          }
-        }
-      } catch (error) {
-        console.error(`Error in manual polling for bot ${botId}:`, error);
-      }
-    }, 3000); // Poll every 3 seconds
-    
-    console.log(`Started manual polling for bot: ${botInstance.name} (${botId})`);
+// Set up webhooks or polling for all bots based on environment
+export function setupBotCommunication() {
+  if (IS_PRODUCTION) {
+    // In production, set up webhooks for all bots
+    setupWebhooks();
+  } else {
+    // In development, use polling for the main bot only
+    // (We already set this up when creating the bot instance)
+    console.log('Development mode: Using polling for primary bot only');
   }
 }
 
-// Start manual polling if needed
-manualPollAdditionalBots();
+// Set up webhooks for all bots
+function setupWebhooks() {
+  // Set the webhook for each bot
+  for (const [botId, botInstance] of bots.entries()) {
+    const webhookUrl = `${BASE_URL}${WEBHOOK_PATH}/${botId}`;
+    
+    botInstance.bot.setWebHook(webhookUrl)
+      .then(() => {
+        console.log(`Webhook set for bot ${botInstance.name} (${botId}): ${webhookUrl}`);
+      })
+      .catch(error => {
+        console.error(`Failed to set webhook for bot ${botInstance.name} (${botId}):`, error);
+      });
+  }
+}
+
+// Function to handle incoming webhook requests
+export function handleWebhookRequest(botId: string, update: any) {
+  const botInstance = bots.get(botId);
+  if (botInstance) {
+    botInstance.bot.processUpdate(update);
+    return true;
+  }
+  return false;
+}
 
 // Helper function to get a bot instance by ID
 export function getBotById(botId: string): TelegramBot | undefined {
@@ -174,4 +136,18 @@ export function getBotById(botId: string): TelegramBot | undefined {
 // Function to get all bot instances
 export function getAllBots(): BotInstance[] {
   return Array.from(bots.values());
+}
+
+// Get the webhook path for a bot
+export function getWebhookPath(botId: string): string {
+  return `${WEBHOOK_PATH}/${botId}`;
+}
+
+// Determine if a path is a webhook path
+export function isWebhookPath(path: string): { isWebhook: boolean, botId: string | null } {
+  const match = path.match(new RegExp(`^${WEBHOOK_PATH}/([\w-]+)$`));
+  if (match && match[1]) {
+    return { isWebhook: true, botId: match[1] };
+  }
+  return { isWebhook: false, botId: null };
 }
