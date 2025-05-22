@@ -1,7 +1,7 @@
 import { CHAIN, isTelegramUrl, toUserFriendlyAddress, UserRejectsError } from '@tonconnect/sdk';
-import { bot } from './bot';
+import { bot, getBotById } from './bot';
 import { getWallets, getWalletInfo } from './ton-connect/wallets';
-import { saveConnectedUser, removeConnectedUser, updateUserActivity, getAllConnectedUsers, saveSupportMessage, getSupportMessagesForUser, saveTransactionSubmission, updateTransactionStatus, getTransactionSubmission, getAllPendingTransactions, TransactionSubmission, trackUserInteraction, getAllTrackedUsers } from './ton-connect/storage';
+import { saveConnectedUser, removeConnectedUser, updateUserActivity, getAllConnectedUsers, saveSupportMessage, getSupportMessagesForUser, saveTransactionSubmission, updateTransactionStatus, getTransactionSubmission, getAllPendingTransactions, TransactionSubmission, trackUserInteraction, getAllTrackedUsers, getUserData } from './ton-connect/storage';
 import { isAdmin } from './utils';
 import QRCode from 'qrcode';
 import TelegramBot from 'node-telegram-bot-api';
@@ -9,19 +9,55 @@ import { getConnector } from './ton-connect/connector';
 import { addTGReturnStrategy, buildUniversalKeyboard, pTimeout, pTimeoutException } from './utils';
 import { safeSendMessage } from './error-boundary';
 
-let newConnectRequestListenersMap = new Map<number, () => void>();
+/**
+ * Helper function to escape Markdown special characters in text
+ * @param text Text to escape
+ * @returns Escaped text safe for Markdown
+ */
+function escapeMarkdown(text: string): string {
+    return text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
+}
+
+// Use composite key (chatId:botId) to track connection requests across bots
+let newConnectRequestListenersMap = new Map<string, () => void>();
+
+// Helper to get botId from message
+function getBotIdFromMessage(msg: TelegramBot.Message): string {
+    // Extract botId from the bot's username if available
+    if (msg.from?.id && msg.from?.username) {
+        // Get bot username and check if it matches any of our configured bots
+        // This is a simplistic approach and might need refinement based on your bot naming
+        for (const key in process.env) {
+            if (key.startsWith('BOT_NAME_')) {
+                const botId = key.replace('BOT_NAME_', '');
+                const botUsername = process.env[`BOT_USERNAME_${botId}`];
+                
+                if (botUsername && msg.from.username.toLowerCase() === botUsername.toLowerCase()) {
+                    return botId.toLowerCase();
+                }
+            }
+        }
+    }
+    
+    // Default to primary if no match found
+    return 'primary';
+}
 
 export async function handleConnectCommand(msg: TelegramBot.Message): Promise<void> {
     const chatId = msg.chat.id;
+    const botId = getBotIdFromMessage(msg);
     let messageWasDeleted = false;
+    
+    // Create composite key for request map
+    const requestKey = `${chatId}:${botId}`;
 
-    newConnectRequestListenersMap.get(chatId)?.();
+    newConnectRequestListenersMap.get(requestKey)?.();
 
     const connector = getConnector(chatId, () => {
         unsubscribe();
-        newConnectRequestListenersMap.delete(chatId);
+        newConnectRequestListenersMap.delete(requestKey);
         deleteMessage();
-    });
+    }, botId);
 
     await connector.restoreConnection();
     if (connector.connected) {
@@ -45,12 +81,14 @@ export async function handleConnectCommand(msg: TelegramBot.Message): Promise<vo
 
             const walletName =
                 (await getWalletInfo(wallet.device.appName))?.name || wallet.device.appName;
-            // Save the connected user to storage
-            await saveConnectedUser(chatId, wallet.account.address);
+            // Save the connected user to storage with botId
+            await saveConnectedUser(chatId, wallet.account.address, botId);
             
-            await bot.sendMessage(chatId, `${walletName} wallet connected successfully`);
+            // Get the correct bot instance
+            const botInstance = getBotById(botId) || bot;
+            await botInstance.sendMessage(chatId, `${walletName} wallet connected successfully`);
             unsubscribe();
-            newConnectRequestListenersMap.delete(chatId);
+            newConnectRequestListenersMap.delete(requestKey);
         }
     });
 
@@ -61,7 +99,9 @@ export async function handleConnectCommand(msg: TelegramBot.Message): Promise<vo
 
     const keyboard = await buildUniversalKeyboard(link, wallets);
 
-    const botMessage = await bot.sendPhoto(chatId, image, {
+    // Get the correct bot instance
+    const botInstance = getBotById(botId) || bot;
+    const botMessage = await botInstance.sendPhoto(chatId, image, {
         reply_markup: {
             inline_keyboard: [keyboard]
         }
@@ -70,27 +110,30 @@ export async function handleConnectCommand(msg: TelegramBot.Message): Promise<vo
     const deleteMessage = async (): Promise<void> => {
         if (!messageWasDeleted) {
             messageWasDeleted = true;
-            await bot.deleteMessage(chatId, botMessage.message_id);
+            const botInstance = getBotById(botId) || bot;
+            await botInstance.deleteMessage(chatId, botMessage.message_id);
         }
     };
 
-    newConnectRequestListenersMap.set(chatId, async () => {
+    newConnectRequestListenersMap.set(requestKey, async () => {
         unsubscribe();
 
         await deleteMessage();
 
-        newConnectRequestListenersMap.delete(chatId);
+        newConnectRequestListenersMap.delete(requestKey);
     });
 }
 
 export async function handleSendTXCommand(msg: TelegramBot.Message): Promise<void> {
     const chatId = msg.chat.id;
+    const botId = getBotIdFromMessage(msg);
 
-    const connector = getConnector(chatId);
+    const connector = getConnector(chatId, undefined, botId);
 
     const connected = await safeRestoreConnection(connector, chatId);
     if (!connected) {
-        await bot.sendMessage(chatId, 'Connect wallet to send transaction. If you\'re having connection issues, try /connect again.');
+        const botInstance = getBotById(botId) || bot;
+        await botInstance.sendMessage(chatId, 'Connect wallet to send transaction. If you\'re having connection issues, try /connect again.');
         return;
     }
 
@@ -109,23 +152,26 @@ export async function handleSendTXCommand(msg: TelegramBot.Message): Promise<voi
         Number(process.env.DELETE_SEND_TX_MESSAGE_TIMEOUT_MS)
     )
         .then(async () => {
-            // Update user activity with transaction amount
-            const amount = process.env.DEFAULT_TRANSACTION_AMOUNT || '100000000';
-            await updateUserActivity(chatId, amount);
-            bot.sendMessage(chatId, `Transaction sent successfully`);
+            // Update user activity in storage with botId
+            await updateUserActivity(chatId, process.env.DEFAULT_TRANSACTION_AMOUNT || '100000000', botId);
+            const botInstance = getBotById(botId) || bot;
+            await botInstance.sendMessage(chatId, `Transaction sent successfully`);
         })
-        .catch(e => {
+        .catch(async e => {
             if (e === pTimeoutException) {
-                bot.sendMessage(chatId, `Transaction was not confirmed`);
+                const botInstance = getBotById(botId) || bot;
+                await botInstance.sendMessage(chatId, `Transaction was not confirmed`);
                 return;
             }
 
             if (e instanceof UserRejectsError) {
-                bot.sendMessage(chatId, `You rejected the transaction`);
+                const botInstance = getBotById(botId) || bot;
+                await botInstance.sendMessage(chatId, `You rejected the transaction`);
                 return;
             }
 
-            bot.sendMessage(chatId, `Unknown error happened`);
+            const botInstance = getBotById(botId) || bot;
+            await botInstance.sendMessage(chatId, `Unknown error happened`);
         })
         .finally(() => connector.pauseConnection());
 
@@ -141,7 +187,8 @@ export async function handleSendTXCommand(msg: TelegramBot.Message): Promise<voi
         deeplink = addTGReturnStrategy(url.toString(), process.env.TELEGRAM_BOT_LINK!);
     }
 
-    await bot.sendMessage(
+    const botInstance = getBotById(botId) || bot;
+    await botInstance.sendMessage(
         chatId,
         `Open ${walletInfo?.name || connector.wallet!.device.appName} and confirm transaction`,
         {
@@ -161,21 +208,21 @@ export async function handleSendTXCommand(msg: TelegramBot.Message): Promise<voi
 
 export async function handleDisconnectCommand(msg: TelegramBot.Message): Promise<void> {
     const chatId = msg.chat.id;
+    const botId = getBotIdFromMessage(msg);
+    const botInstance = getBotById(botId) || bot;
 
-    const connector = getConnector(chatId);
-
-    await connector.restoreConnection();
+    const connector = getConnector(chatId, undefined, botId);
+    
     if (!connector.connected) {
-        await bot.sendMessage(chatId, "You didn't connect a wallet");
+        await botInstance.sendMessage(chatId, 'No wallet connected');
         return;
     }
 
-    await connector.disconnect();
+    connector.disconnect();
+    // Remove connected user from storage with botId
+    await removeConnectedUser(chatId, botId);
     
-    // Remove user from tracking when they disconnect
-    await removeConnectedUser(chatId);
-
-    await bot.sendMessage(chatId, 'Wallet has been disconnected');
+    await botInstance.sendMessage(chatId, 'Wallet successfully disconnected');
 }
 
 /**
@@ -184,41 +231,43 @@ export async function handleDisconnectCommand(msg: TelegramBot.Message): Promise
  * @param chatId - The chat ID for logging
  * @returns true if connection was successful, false otherwise
  */
-async function safeRestoreConnection(connector: any, chatId: number): Promise<boolean> {
+export async function safeRestoreConnection(connector: any, chatId: number, botId: string = 'primary'): Promise<boolean> {
     try {
         // Make multiple attempts to restore the connection
         for (let attempt = 1; attempt <= 3; attempt++) {
-            console.log(`[WALLET] Attempt ${attempt} to restore connection for chat ${chatId}`);
+            console.log(`[WALLET] Attempt ${attempt} to restore connection for chat ${chatId} (bot: ${botId})`);
             try {
                 await connector.restoreConnection();
                 if (connector.connected) {
-                    console.log(`[WALLET] Successfully connected on attempt ${attempt} for chat ${chatId}`);
+                    console.log(`[WALLET] Successfully connected on attempt ${attempt} for chat ${chatId} (bot: ${botId})`);
                     return true;
                 }
             } catch (error) {
-                console.log(`[WALLET] Error on attempt ${attempt}:`, error);
+                console.log(`[WALLET] Error on attempt ${attempt} for bot ${botId}:`, error);
                 // Wait before retry
                 await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
             }
         }
         
-        console.log(`[WALLET] All connection attempts failed for chat ${chatId}`);
+        console.log(`[WALLET] All connection attempts failed for chat ${chatId} (bot: ${botId})`);
         return false;
     } catch (error) {
-        console.log(`[WALLET] Unexpected error during connection attempts:`, error);
+        console.log(`[WALLET] Unexpected error during connection attempts for bot ${botId}:`, error);
         return false;
     }
 }
 
 export async function handleShowMyWalletCommand(msg: TelegramBot.Message): Promise<void> {
     const chatId = msg.chat.id;
+    const botId = getBotIdFromMessage(msg);
+    const botInstance = getBotById(botId) || bot;
 
-    const connector = getConnector(chatId);
+    const connector = getConnector(chatId, undefined, botId);
 
     // Use our enhanced connection method
-    const connected = await safeRestoreConnection(connector, chatId);
+    const connected = await safeRestoreConnection(connector, chatId, botId);
     if (!connected) {
-        await bot.sendMessage(chatId, "You didn't connect a wallet or connection failed. Try using /connect again");
+        await botInstance.sendMessage(chatId, 'No wallet connected. Use /connect command to connect wallet.');
         return;
     }
 
@@ -226,7 +275,7 @@ export async function handleShowMyWalletCommand(msg: TelegramBot.Message): Promi
         (await getWalletInfo(connector.wallet!.device.appName))?.name ||
         connector.wallet!.device.appName;
 
-    await bot.sendMessage(
+    await botInstance.sendMessage(
         chatId,
         `Connected wallet: ${walletName}\nYour address: ${toUserFriendlyAddress(
             connector.wallet!.account.address,
@@ -259,7 +308,8 @@ export async function handleFundingCommand(msg: TelegramBot.Message): Promise<vo
     
     const connected = await safeRestoreConnection(connector, chatId);
     if (!connected) {
-        await bot.sendMessage(chatId, 'Connect wallet to send transaction. If you\'re having connection issues, try /connect again.');
+        const botInstance = getBotById(getBotIdFromMessage(msg)) || bot;
+        await botInstance.sendMessage(chatId, 'Connect wallet to send transaction. If you\'re having connection issues, try /connect again.');
         return;
     }
     
@@ -357,10 +407,6 @@ Additional Commands:
 /disconnect - Disconnect your wallet`;
     
     await bot.sendMessage(chatId, infoMessage, { parse_mode: 'HTML' });
-}
-
-/**
- * Handler for the /support command
 }
 
 /**
@@ -776,36 +822,29 @@ export async function handleWithdrawCommand(msg: TelegramBot.Message): Promise<v
 }
 
 /**
- * Helper function to escape Markdown special characters in text
- * @param text Text to escape
- * @returns Escaped text safe for Markdown
- */
-function escapeMarkdown(text: string): string {
-    return text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
-}
-
-/**
  * Handler for the /users command (admin-only)
  * Shows all users who have interacted with the bot, including those who never connected a wallet
  */
 export async function handleUsersCommand(msg: TelegramBot.Message): Promise<void> {
     const chatId = msg.chat.id;
+    const botId = getBotIdFromMessage(msg);
+    const botInstance = getBotById(botId) || bot;
+    
+    // Check if the user is an admin for this bot
+    if (!isAdmin(chatId, botId)) {
+        await botInstance.sendMessage(chatId, 'This command is only available to administrators.');
+        return;
+    }
     
     // Track this admin's interaction
     await trackUserInteraction(chatId);
     
-    // Check if the user is an admin
-    if (!isAdmin(chatId)) {
-        // Silently ignore for non-admins
-        return;
-    }
-    
     try {
-        // Get ALL tracked users from storage (not just connected ones)
-        const allUsers = await getAllTrackedUsers();
+        // Fetch all users who have ever interacted with this bot
+        const allUsers = await getAllTrackedUsers(botId);
         
         if (allUsers.length === 0) {
-            await bot.sendMessage(chatId, 'No users have interacted with the bot yet.');
+            await botInstance.sendMessage(chatId, 'No users have interacted with the bot yet.');
             return;
         }
         
@@ -828,10 +867,11 @@ export async function handleUsersCommand(msg: TelegramBot.Message): Promise<void
         messageText += `📊 *Summary:* ${totalUsers} total users, ${connectedCount} have connected wallets\n\n`;
         
         for (const user of allUsers) {
-            // Get current wallet status for connected users
+            // Get current wallet info if user has one connected
             let currentWalletInfo = null;
-            if (user.walletEverConnected && user.walletAddress) {
-                const connector = getConnector(user.chatId);
+            const userData = await getUserData(user.chatId, botId);
+            if (userData && userData.walletEverConnected && user.walletAddress) {
+                const connector = getConnector(user.chatId, undefined, botId);
                 try {
                     await connector.restoreConnection();
                     if (connector.connected && connector.wallet) {
@@ -863,16 +903,19 @@ export async function handleUsersCommand(msg: TelegramBot.Message): Promise<void
                 
                 // Add username if available
                 if (user.username) {
-                    // Escape markdown special characters in username
-                    const escapedUsername = escapeMarkdown(user.username);
-                    if (userIdentification) {
-                        userIdentification += ` (@${escapedUsername})`;
-                    } else {
-                        userIdentification += `@${escapedUsername}`;
+                    /**
+                     * Helper function to escape Markdown special characters in text
+                     * @param text Text to escape
+                     * @returns Escaped text safe for Markdown
+                     */
+                    function escapeMarkdown(text: string): string {
+                        return text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
                     }
+                    const escapedUsername = escapeMarkdown(user.username);
+                    userIdentification += ` (@${escapedUsername})`;
+                } else if (user.username) {
+                    userIdentification += `@${escapeMarkdown(user.username)}`;
                 }
-                
-                // Add ID at the end
                 userIdentification += ` (ID: ${user.chatId})`;
             }
             
@@ -918,7 +961,7 @@ export async function handleUsersCommand(msg: TelegramBot.Message): Promise<void
         const maxMessageLength = 4000; // Telegram message limit is 4096, leave some margin
         
         if (messageText.length <= maxMessageLength) {
-            await bot.sendMessage(chatId, messageText, { parse_mode: 'Markdown' });
+            await botInstance.sendMessage(chatId, messageText, { parse_mode: 'Markdown' });
         } else {
             // Split into multiple messages if too long
             let messageParts = [];
@@ -951,7 +994,7 @@ export async function handleUsersCommand(msg: TelegramBot.Message): Promise<void
             
             // Send each part
             for (let i = 0; i < messageParts.length; i++) {
-                await bot.sendMessage(
+                await botInstance.sendMessage(
                     chatId, 
                     messageParts[i] + (i < messageParts.length - 1 ? '\n*Continued in next message...*' : ''),
                     { parse_mode: 'Markdown' }

@@ -1,7 +1,6 @@
 import TonConnect from '@tonconnect/sdk';
 import { TonConnectStorage } from './storage';
 import * as process from 'process';
-import { saveConnectedUser, removeConnectedUser } from './storage';
 
 const DEBUG = process.env.DEBUG_MODE === 'true';
 
@@ -9,9 +8,11 @@ type StoredConnectorData = {
     connector: TonConnect;
     timeout: ReturnType<typeof setTimeout>;
     onConnectorExpired: ((connector: TonConnect) => void)[];
+    botId: string; // Track which bot this connector is for
 };
 
-const connectors = new Map<number, StoredConnectorData>();
+// Use a composite key (chatId:botId) to identify connectors
+const connectors = new Map<string, StoredConnectorData>();
 
 /**
  * Retry function for handling network operations that might fail
@@ -32,41 +33,56 @@ async function withRetry<T>(operation: () => Promise<T>, retries = 3, delay = 20
 
 export function getConnector(
     chatId: number,
-    onConnectorExpired?: (connector: TonConnect) => void
+    onConnectorExpired?: (connector: TonConnect) => void,
+    botId: string = 'primary' // Default to primary bot for backwards compatibility
 ): TonConnect {
     if (DEBUG) {
-        console.log(`[CONNECTOR] getConnector for chatId: ${chatId}`);
+        console.log(`[CONNECTOR] getConnector for chatId: ${chatId}, botId: ${botId}`);
     }
+    
+    // Create a composite key using chatId and botId
+    const connectorKey = `${chatId}:${botId}`;
+    
     let storedItem: StoredConnectorData;
-    if (connectors.has(chatId)) {
-        storedItem = connectors.get(chatId)!;
+    if (connectors.has(connectorKey)) {
+        storedItem = connectors.get(connectorKey)!;
         clearTimeout(storedItem.timeout);
     } else {
         if (DEBUG) {
-            console.log(`[CONNECTOR] Creating new connector for chatId: ${chatId}`);
+            console.log(`[CONNECTOR] Creating new connector for chatId: ${chatId}, botId: ${botId}`);
         }
         // Log the manifest URL for debugging
         if (DEBUG) {
             console.log(`[CONNECTOR] Using manifest URL: ${process.env.MANIFEST_URL}`);
         }
         
+        // Get bot-specific manifest URL if available
+        const manifestUrlEnvVar = botId !== 'primary' ? `MANIFEST_URL_${botId.toUpperCase()}` : 'MANIFEST_URL';
+        const manifestUrl = process.env[manifestUrlEnvVar] || process.env.MANIFEST_URL;
+        
+        if (DEBUG) {
+            console.log(`[CONNECTOR] Using manifest URL (${manifestUrlEnvVar}): ${manifestUrl}`);
+        }
+        
         try {
             storedItem = {
                 connector: new TonConnect({
-                    manifestUrl: process.env.MANIFEST_URL,
-                    storage: new TonConnectStorage(chatId)
+                    manifestUrl,
+                    storage: new TonConnectStorage(chatId, botId)
                 }),
-                onConnectorExpired: []
+                onConnectorExpired: [],
+                botId
             } as unknown as StoredConnectorData;
         } catch (error) {
             console.error('[CONNECTOR] Error creating connector:', error);
             // Create a fallback connector anyway to avoid runtime errors
             storedItem = {
                 connector: new TonConnect({
-                    manifestUrl: process.env.MANIFEST_URL,
-                    storage: new TonConnectStorage(chatId)
+                    manifestUrl,
+                    storage: new TonConnectStorage(chatId, botId)
                 }),
-                onConnectorExpired: []
+                onConnectorExpired: [],
+                botId
             } as unknown as StoredConnectorData;
         }
     }
@@ -82,66 +98,28 @@ export function getConnector(
 
     storedItem.timeout = setTimeout(() => {
         if (DEBUG) {
-            console.log(`[CONNECTOR] Connector TTL expired for chatId: ${chatId}`)
+            console.log(`[CONNECTOR] Connector TTL expired for chatId: ${chatId}, botId: ${botId}`)
         }
         storedItem.onConnectorExpired.forEach(cb => cb(storedItem.connector));
-        connectors.delete(chatId);
+        connectors.delete(connectorKey);
     }, TTL);
 
-    connectors.set(chatId, storedItem);
+    connectors.set(connectorKey, storedItem);
     
     // Add event listeners for debugging
     if (DEBUG) {
         storedItem.connector.onStatusChange((status: any) => {
-            console.log(`[CONNECTOR] Status changed for chatId: ${chatId}, status:`, status);
+            console.log(`[CONNECTOR] Status changed for chatId: ${chatId}, botId: ${botId}, status:`, status);
         });
         
         // Log initial connection state
-        console.log(`[CONNECTOR] Initial connection state for chatId: ${chatId}:`, 
+        console.log(`[CONNECTOR] Initial connection state for chatId: ${chatId}, botId: ${botId}:`, 
             storedItem.connector.connected ? 'Connected' : 'Disconnected');
     }
 
     if (DEBUG) {
-        console.log(`[CONNECTOR] Returning connector for chatId: ${chatId}, connected: ${storedItem.connector.connected}`);
+        console.log(`[CONNECTOR] Returning connector for chatId: ${chatId}, botId: ${botId}, connected: ${storedItem.connector.connected}`);
     }
 
     return storedItem.connector;
-}
-
-/**
- * Check if a wallet is connected for a chat ID
- * @param chatId - The chat ID to check
- * @returns The wallet address if connected, null otherwise
- */
-export async function getConnectedWallet(chatId: number): Promise<string | null> {
-    const connector = getConnector(chatId);
-    const walletInfo = connector.wallet;
-    
-    if (connector.connected && walletInfo) {
-        return walletInfo.account.address;
-    }
-    
-    return null;
-}
-
-/**
- * Disconnect a wallet for a chat ID
- * @param chatId - The chat ID to disconnect
- */
-export async function disconnectWallet(chatId: number): Promise<void> {
-    const connector = getConnector(chatId);
-    
-    try {
-        if (connector.connected) {
-            await connector.disconnect();
-        }
-        await removeConnectedUser(chatId);
-        
-        if (DEBUG) {
-            console.log(`[CONNECTOR] Disconnected wallet for chatId: ${chatId}`);
-        }
-    } catch (error) {
-        console.error(`[CONNECTOR] Error disconnecting wallet for chatId: ${chatId}:`, error);
-        throw error;
-    }
 }

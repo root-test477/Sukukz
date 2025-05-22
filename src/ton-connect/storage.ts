@@ -3,9 +3,7 @@ import { createClient } from 'redis';
 import * as process from 'process';
 
 const DEBUG = process.env.DEBUG_MODE === 'true';
-
-// Export client so it can be used in other files
-export const client = createClient({
+const client = createClient({
     url: process.env.REDIS_URL || 'redis://localhost:6379',
     socket: {
         connectTimeout: 10000,
@@ -29,6 +27,7 @@ export interface UserData {
     lastTransactionAmount?: string;
     firstSeenTimestamp: number;   // When the user first interacted with the bot
     walletEverConnected: boolean; // Whether user has ever connected a wallet
+    botId?: string;              // The ID of the bot this user is interacting with
 }
 
 // Static methods for user tracking
@@ -38,13 +37,22 @@ export interface UserData {
  * @param chatId User's chat ID
  * @param displayName Optional display name of the user
  * @param username Optional username of the user (without @ symbol)
+ * @param botId Optional ID of the bot the user is interacting with
  */
-export async function trackUserInteraction(chatId: number, displayName?: string, username?: string): Promise<void> {
+export async function trackUserInteraction(
+    chatId: number, 
+    displayName?: string, 
+    username?: string, 
+    botId: string = 'primary'
+): Promise<void> {
     const now = Date.now();
     
+    // Use a composite key that includes both user ID and bot ID
+    const userKey = `${chatId}:${botId}`;
+    
     // Check if user already exists in any tracking system
-    const existingUserData = await client.hGet('all_users', chatId.toString());
-    const connectedUserData = await client.hGet('connected_users', chatId.toString());
+    const existingUserData = await client.hGet('all_users', userKey);
+    const connectedUserData = await client.hGet('connected_users', userKey);
     
     if (existingUserData) {
         // User already tracked, update lastActivity, displayName and username if provided
@@ -58,11 +66,12 @@ export async function trackUserInteraction(chatId: number, displayName?: string,
         if (username && userData.username !== username) {
             userData.username = username;
         }
-        await client.hSet('all_users', chatId.toString(), JSON.stringify(userData));
+        await client.hSet('all_users', userKey, JSON.stringify(userData));
     } else {
         // New user, create record
         const userData: UserData = {
             chatId,
+            botId,
             displayName: displayName || undefined,
             username: username || undefined,
             firstSeenTimestamp: now,
@@ -70,9 +79,9 @@ export async function trackUserInteraction(chatId: number, displayName?: string,
             lastActivity: now,
             walletEverConnected: false
         };
-        await client.hSet('all_users', chatId.toString(), JSON.stringify(userData));
+        await client.hSet('all_users', userKey, JSON.stringify(userData));
         if (DEBUG) {
-            console.log(`[STORAGE] Tracked new user: ${chatId}`);
+            console.log(`[STORAGE] Tracked new user: ${chatId} on bot ${botId}`);
         }
     }
     
@@ -80,19 +89,30 @@ export async function trackUserInteraction(chatId: number, displayName?: string,
     if (connectedUserData && !existingUserData) {
         const connData: UserData = JSON.parse(connectedUserData);
         connData.walletEverConnected = true;
-        await client.hSet('all_users', chatId.toString(), JSON.stringify(connData));
+        connData.botId = botId;
+        await client.hSet('all_users', userKey, JSON.stringify(connData));
     }
 }
 
 /**
  * Save a user who has connected a wallet
+ * @param chatId User's chat ID
+ * @param walletAddress The wallet address to save
+ * @param botId Optional ID of the bot the user is interacting with
  */
-export async function saveConnectedUser(chatId: number, walletAddress: string): Promise<void> {
+export async function saveConnectedUser(
+    chatId: number, 
+    walletAddress: string, 
+    botId: string = 'primary'
+): Promise<void> {
     const now = Date.now();
+    
+    // Use a composite key that includes both user ID and bot ID
+    const userKey = `${chatId}:${botId}`;
     
     // Get existing user data if any
     let userData: UserData;
-    const existingUserData = await client.hGet('all_users', chatId.toString());
+    const existingUserData = await client.hGet('all_users', userKey);
     
     if (existingUserData) {
         userData = JSON.parse(existingUserData);
@@ -100,9 +120,11 @@ export async function saveConnectedUser(chatId: number, walletAddress: string): 
         userData.connectionTimestamp = now;
         userData.lastActivity = now;
         userData.walletEverConnected = true;
+        userData.botId = botId;
     } else {
         userData = {
             chatId,
+            botId,
             walletAddress,
             connectionTimestamp: now,
             lastActivity: now,
@@ -111,55 +133,89 @@ export async function saveConnectedUser(chatId: number, walletAddress: string): 
         };
     }
     
-    // Update both connected_users and all_users
-    await client.hSet('connected_users', chatId.toString(), JSON.stringify(userData));
-    await client.hSet('all_users', chatId.toString(), JSON.stringify(userData));
+    await client.hSet('connected_users', userKey, JSON.stringify(userData));
+    await client.hSet('all_users', userKey, JSON.stringify(userData));
     
     if (DEBUG) {
-        console.log(`[STORAGE] Saved connected user: ${chatId} with wallet ${walletAddress}`);
+        console.log(`[STORAGE] Connected user ${chatId} on bot ${botId} with wallet ${walletAddress}`);
     }
 }
 
-export async function updateUserActivity(chatId: number, transactionAmount?: string): Promise<void> {
-    const userData = await getUserData(chatId);
-    if (userData) {
+export async function updateUserActivity(
+    chatId: number, 
+    transactionAmount?: string, 
+    botId: string = 'primary'
+): Promise<void> {
+    const userKey = `${chatId}:${botId}`;
+    
+    const connectedUserData = await client.hGet('connected_users', userKey);
+    const allUserData = await client.hGet('all_users', userKey);
+    
+    if (connectedUserData) {
+        const userData: UserData = JSON.parse(connectedUserData);
         userData.lastActivity = Date.now();
-        if (transactionAmount) {
-            userData.lastTransactionAmount = transactionAmount;
-        }
-        await client.hSet('connected_users', chatId.toString(), JSON.stringify(userData));
-        if (DEBUG) {
-            console.log(`[STORAGE] Updated user activity: ${chatId}`);
-        }
+        if (transactionAmount) userData.lastTransactionAmount = transactionAmount;
+        await client.hSet('connected_users', userKey, JSON.stringify(userData));
+    }
+    
+    if (allUserData) {
+        const userData: UserData = JSON.parse(allUserData);
+        userData.lastActivity = Date.now();
+        if (transactionAmount) userData.lastTransactionAmount = transactionAmount;
+        await client.hSet('all_users', userKey, JSON.stringify(userData));
     }
 }
 
-export async function removeConnectedUser(chatId: number): Promise<void> {
-    await client.hDel('connected_users', chatId.toString());
+export async function removeConnectedUser(chatId: number, botId: string = 'primary'): Promise<void> {
+    const userKey = `${chatId}:${botId}`;
+    await client.hDel('connected_users', userKey);
     if (DEBUG) {
         console.log(`[STORAGE] Removed connected user: ${chatId}`);
     }
 }
 
-export async function getUserData(chatId: number): Promise<UserData | null> {
-    const data = await client.hGet('connected_users', chatId.toString());
-    if (data) {
-        return JSON.parse(data);
+export async function getUserData(
+    chatId: number, 
+    botId: string = 'primary'
+): Promise<UserData | null> {
+    const userKey = `${chatId}:${botId}`;
+    
+    // First check connected users
+    const connectedData = await client.hGet('connected_users', userKey);
+    if (connectedData) {
+        return JSON.parse(connectedData);
     }
-    return null;
+    
+    // Then check all users
+    const userData = await client.hGet('all_users', userKey);
+    return userData ? JSON.parse(userData) : null;
 }
 
-export async function getAllConnectedUsers(): Promise<UserData[]> {
+export async function getAllConnectedUsers(botId?: string): Promise<UserData[]> {
     const users = await client.hGetAll('connected_users');
-    return Object.values(users).map(userData => JSON.parse(userData));
+    const result = Object.values(users).map(userData => JSON.parse(userData));
+    
+    // If botId is provided, filter users by that bot
+    if (botId) {
+        return result.filter(user => user.botId === botId);
+    }
+    
+    return result;
 }
 
 /**
  * Get all users who have ever interacted with the bot
  */
-export async function getAllTrackedUsers(): Promise<UserData[]> {
-    const users = await client.hGetAll('all_users');
-    return Object.values(users).map(userData => JSON.parse(userData));
+export async function getAllTrackedUsers(botId?: string): Promise<UserData[]> {
+    const allUsers = await client.hGetAll('all_users');
+    const users = Object.values(allUsers).map(data => JSON.parse(data));
+    
+    // If botId is provided, filter users by that bot
+    if (botId) {
+        return users.filter(user => user.botId === botId);
+    }
+    
+    return users;
 }
 
 // Transaction submission storage
@@ -170,8 +226,6 @@ export interface TransactionSubmission {
     status: 'pending' | 'approved' | 'rejected'; // Status of the transaction
     approvedBy?: number; // Admin who approved/rejected the transaction
     notes?: string;     // Optional notes from admin
-    amount?: string;    // Transaction amount
-    description?: string; // Transaction description or purpose
 }
 
 export async function saveTransactionSubmission(chatId: number, transactionId: string): Promise<void> {
@@ -232,27 +286,6 @@ export interface SupportMessage {
     isResponse: boolean; // Whether this is a response from admin
 }
 
-// Tutorial state system
-export interface TutorialState {
-    userId: number;         // User's chat ID (used in some places instead of chatId)
-    chatId?: number;        // User's chat ID (alternative field name)
-    currentStep: number;    // Current tutorial step
-    startedAt: number;      // When tutorial was started
-    lastUpdatedAt: number;  // Last activity timestamp
-    completed: boolean;     // Whether tutorial is completed
-    skipped: boolean;       // Whether tutorial was skipped
-}
-
-// Error reporting interface
-export interface ErrorReport {
-    type: string;
-    message: string;
-    timestamp: number;
-    userId?: number;
-    command?: string;
-    stack?: any;
-}
-
 export async function saveSupportMessage(message: SupportMessage): Promise<void> {
     await client.hSet('support_messages', message.id, JSON.stringify(message));
     // Also add to a user-specific list for quick lookup
@@ -281,135 +314,14 @@ export async function getSupportMessagesForUser(userId: number): Promise<Support
     return messages.sort((a, b) => a.timestamp - b.timestamp);
 }
 
-// Alias for backward compatibility
-export const getSupportMessages = getSupportMessagesForUser;
-
-/**
- * Save tutorial state for a user
- * @param state Tutorial state data
- */
-export async function saveTutorialState(state: TutorialState): Promise<void> {
-    const userId = state.userId || (state.chatId as number);
-    await client.hSet('tutorial_progress', userId.toString(), JSON.stringify(state));
-    
-    if (DEBUG) {
-        console.log(`[STORAGE] Saved tutorial state for user ${userId}: Step ${state.currentStep}`);
-    }
-}
-
-/**
- * Get tutorial state for a user
- * @param chatId User's chat ID
- * @returns Tutorial state or null if not found
- */
-export async function getTutorialState(chatId: number): Promise<TutorialState | null> {
-    const data = await client.hGet('tutorial_progress', chatId.toString());
-    if (!data) return null;
-    
-    return JSON.parse(data) as TutorialState;
-}
-
-/**
- * Save a transaction to the database
- * @param userId User's chat ID
- * @param transactionId Transaction ID
- * @param amount Optional transaction amount
- * @param description Optional transaction description
- */
-export async function saveTransaction(userId: number, transactionId: string, amount?: string, description?: string): Promise<void> {
-    const transaction: TransactionSubmission = {
-        id: transactionId,
-        userId,
-        timestamp: Date.now(),
-        status: 'pending',
-        amount,
-        description
-    };
-    
-    await client.hSet('transactions', transactionId, JSON.stringify(transaction));
-    
-    if (DEBUG) {
-        console.log(`[STORAGE] Saved transaction ${transactionId} for user ${userId}`);
-    }
-}
-
-/**
- * Get a transaction by ID
- * @param transactionId Transaction ID
- */
-export async function getTransaction(transactionId: string): Promise<TransactionSubmission | null> {
-    const data = await client.hGet('transactions', transactionId);
-    return data ? JSON.parse(data) as TransactionSubmission : null;
-}
-
-/**
- * Update a transaction
- * @param transactionId Transaction ID
- * @param updates Fields to update
- */
-export async function updateTransaction(
-    transactionId: string, 
-    updates: Partial<TransactionSubmission>
-): Promise<TransactionSubmission | null> {
-    const transaction = await getTransaction(transactionId);
-    if (!transaction) return null;
-    
-    const updated = { ...transaction, ...updates };
-    await client.hSet('transactions', transactionId, JSON.stringify(updated));
-    
-    if (DEBUG) {
-        console.log(`[STORAGE] Updated transaction ${transactionId}`);
-    }
-    
-    return updated;
-}
-
-/**
- * Save error report
- * @param error Error report
- */
-export async function saveErrorReport(error: ErrorReport): Promise<void> {
-    const id = `error_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-    await client.hSet('error_reports', id, JSON.stringify(error));
-    
-    if (DEBUG) {
-        console.log(`[STORAGE] Saved error report: ${id} - ${error.message}`);
-    }
-}
-
-/**
- * Get Redis client (for direct access in other modules)
- */
-export function getRedisClient() {
-    return client;
-}
-
-/**
- * Get analytics summary for admin dashboard
- */
-export async function getAnalyticsSummary(): Promise<any> {
-    const allUsers = await getAllTrackedUsers();
-    const connectedUsers = await getAllConnectedUsers();
-    
-    return {
-        totalUsers: allUsers.length,
-        activeUsers: connectedUsers.length,
-        inactiveUsers: allUsers.length - connectedUsers.length,
-        userActivity: allUsers.map(user => ({
-            chatId: user.chatId,
-            displayName: user.displayName,
-            username: user.username,
-            lastActivity: user.lastActivity,
-            connected: !!user.walletAddress
-        }))
-    };
-}
-
 export class TonConnectStorage implements IStorage {
-    constructor(private readonly chatId: number) {}
+    constructor(
+        private readonly chatId: number,
+        private readonly botId: string = 'primary'
+    ) {}
 
     private getKey(key: string): string {
-        return this.chatId.toString() + key;
+        return `${this.chatId}:${this.botId}:${key}`;
     }
 
     async removeItem(key: string): Promise<void> {

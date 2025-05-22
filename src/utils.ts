@@ -8,11 +8,28 @@ export const pTimeoutException = Symbol();
 /**
  * Check if a user is an admin based on their chat ID
  * @param chatId - Telegram chat ID to check
+ * @param botId - Optional bot ID to check for bot-specific admins
  * @returns true if the user is an admin, false otherwise
  */
-export function isAdmin(chatId: number): boolean {
-    const adminIds = process.env.ADMIN_IDS?.split(',').map(id => Number(id.trim())) || [];
-    return adminIds.includes(chatId);
+export function isAdmin(chatId: number, botId?: string): boolean {
+    // Global admin IDs that have access to all bots
+    const globalAdminIds = process.env.ADMIN_IDS?.split(',').map(id => Number(id.trim())) || [];
+    
+    // Check if user is a global admin
+    if (globalAdminIds.includes(chatId)) {
+        return true;
+    }
+    
+    // If botId is provided, check for bot-specific admin IDs
+    if (botId) {
+        const botSpecificAdminIdsEnv = process.env[`ADMIN_IDS_${botId.toUpperCase()}`];
+        if (botSpecificAdminIdsEnv) {
+            const botSpecificAdminIds = botSpecificAdminIdsEnv.split(',').map(id => Number(id.trim()));
+            return botSpecificAdminIds.includes(chatId);
+        }
+    }
+    
+    return false;
 }
 
 export function pTimeout<T>(

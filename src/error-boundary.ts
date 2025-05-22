@@ -1,8 +1,6 @@
 import TelegramBot from 'node-telegram-bot-api';
 import { bot } from './bot';
 import { isAdmin } from './utils';
-import { saveErrorReport, getRedisClient } from './ton-connect/storage';
-import { BotError, ErrorType } from './error-types';
 
 /**
  * Error boundary wrapper for bot command handlers
@@ -20,21 +18,6 @@ export function withErrorBoundary<T extends any[]>(
     } catch (error) {
       console.error(`Error in command handler: ${error instanceof Error ? error.message : error}`);
       console.error(error);
-      
-      // Convert to BotError if it's not already
-      const botError = error instanceof BotError 
-        ? error 
-        : BotError.fromError(
-            error instanceof Error ? error : new Error(String(error)),
-            ErrorType.COMMAND_ERROR
-          );
-      
-      // Save error report to Redis
-      try {
-        await saveErrorReport(botError.toObject());
-      } catch (saveError) {
-        console.error('Failed to save error report:', saveError);
-      }
 
       // Try to extract chatId from the arguments (assuming first arg is Message or CallbackQuery)
       let chatId: number | undefined;
@@ -67,55 +50,33 @@ export function withErrorBoundary<T extends any[]>(
           );
           
           // Notify admin(s) about the error
-          await sendErrorReport(botError, chatId, args[0]?.text || 'Unknown');
+          const adminIds = process.env.ADMIN_IDS?.split(',').map(id => Number(id.trim())) || [];
+          if (adminIds.length > 0) {
+            const errorDetails = `
+🔴 *Bot Error Report*
+
+*Error Type*: ${error instanceof Error ? error.name : 'Unknown'}
+*Message*: ${error instanceof Error ? error.message : String(error)}
+*User ID*: ${chatId}
+*Command*: ${args[0]?.text || 'Unknown'}
+*Time*: ${new Date().toISOString()}`;
+
+            for (const adminId of adminIds) {
+              try {
+                if (adminId !== chatId || isAdmin(chatId)) {
+                  await bot.sendMessage(adminId, errorDetails, { parse_mode: 'Markdown' });
+                }
+              } catch (notifyError) {
+                console.error(`Failed to notify admin ${adminId} about error:`, notifyError);
+              }
+            }
+          }
         } catch (sendError) {
           console.error('Error sending error notification:', sendError);
         }
       }
     }
   };
-}
-
-/**
- * Safe message sender that handles Markdown parsing errors
- * If sending with Markdown fails, it will retry without Markdown
- */
-/**
- * Send error report to administrators
- * @param error The error object
- * @param userId The user ID who triggered the error
- * @param command The command that caused the error
- */
-export async function sendErrorReport(error: BotError | Error, userId?: number, command?: string): Promise<void> {
-  const adminIds = process.env.ADMIN_IDS?.split(',').map(id => Number(id.trim())) || [];
-  if (adminIds.length === 0) return;
-  
-  const botError = error instanceof BotError 
-    ? error 
-    : BotError.fromError(error, ErrorType.UNKNOWN_ERROR, userId, command);
-  
-  // Update user ID and command if provided
-  if (userId && !botError.userId) botError.userId = userId;
-  if (command && !botError.command) botError.command = command;
-  
-  const errorDetails = `
-🔴 *Bot Error Report*
-
-*Error Type*: ${botError.type || 'Unknown'}
-*Message*: ${botError.message}
-*User ID*: ${botError.userId || 'Unknown'}
-*Command*: ${botError.command || 'Unknown'}
-*Time*: ${new Date(botError.timestamp).toISOString()}`;
-
-  for (const adminId of adminIds) {
-    try {
-      if (adminId !== botError.userId || (botError.userId && isAdmin(botError.userId))) {
-        await bot.sendMessage(adminId, errorDetails, { parse_mode: 'Markdown' });
-      }
-    } catch (notifyError) {
-      console.error(`Failed to notify admin ${adminId} about error:`, notifyError);
-    }
-  }
 }
 
 /**

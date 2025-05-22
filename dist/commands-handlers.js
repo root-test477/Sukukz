@@ -21,7 +21,6 @@ const utils_1 = require("./utils");
 const qrcode_1 = __importDefault(require("qrcode"));
 const connector_1 = require("./ton-connect/connector");
 const utils_2 = require("./utils");
-const error_boundary_1 = require("./error-boundary");
 let newConnectRequestListenersMap = new Map();
 function handleConnectCommand(msg) {
     var _a, _b;
@@ -285,35 +284,48 @@ exports.handleFundingCommand = handleFundingCommand;
 function handleInfoCommand(msg) {
     return __awaiter(this, void 0, void 0, function* () {
         const chatId = msg.chat.id;
-        const infoMessage = `<b>📱 Sukuk Financial Bot - Help & Recommendations 📱</b>
+        const infoMessage = `
+📱 *Sukuk Financial Bot - Help & Recommendations* 📱
 
-How to Connect a Wallet:
-Use the /connect command and select a supported wallet.
-🔹 Recommendation: Use @wallet as it is native to Telegram for seamless integration.
+`
+            + `*How to Connect a Wallet*:
+`
+            + `Use the \/connect command and select a supported wallet.
+`
+            + `🔹 *Recommendation*: Use @wallet as it is native to Telegram for seamless integration.
 
-How to Get Support:
-Use the /support command followed by your message to connect with a live support agent for real-time assistance.
+`
+            + `*How to Get Support*:
+`
+            + `Use the \/support command followed by your message to connect with a live support agent for real-time assistance.
 
-How to Submit a Transaction for Approval:
-After adding TON to your balance, use the /pay_now command followed by the transaction ID to submit it for admin confirmation and approval.
+`
+            + `*How to Submit a Transaction for Approval*:
+`
+            + `After adding TON to your balance, use the \/pay-now command followed by your transaction ID to send it for admin confirmation and approval.
 
-How to Withdraw:
-To withdraw interests, securely use the website by using the /withdraw command or follow the Launch button on your screen.
+`
+            + `*How to Withdraw*:
+`
+            + `To withdraw interests, securely use the website by using the \/withdraw command or follow the launch button on your screen.
 
-Additional Commands:
-/my_wallet - View your connected wallet details
-/funding - Fund with a specific amount
-/send_tx - Send a transaction with default amount
-/withdraw - Access the withdrawal portal
-/disconnect - Disconnect your wallet`;
-        yield bot_1.bot.sendMessage(chatId, infoMessage, { parse_mode: 'HTML' });
+`
+            + `*Additional Commands*:
+`
+            + `\/connect - Connect your TON wallet
+`
+            + `\/my_wallet - View your connected wallet details
+`
+            + `\/funding [amount] - Fund with a specific amount
+`
+            + `\/send_tx - Send a transaction with default amount
+`
+            + `\/disconnect - Disconnect your wallet
+`;
+        yield bot_1.bot.sendMessage(chatId, infoMessage, { parse_mode: 'Markdown' });
     });
 }
 exports.handleInfoCommand = handleInfoCommand;
-/**
- * Handler for the /support command
-}
-
 /**
  * Handler for the /support command
  * Allows users to send support messages and admins to respond
@@ -406,7 +418,7 @@ function handleSupportCommand(msg) {
 }
 exports.handleSupportCommand = handleSupportCommand;
 /**
- * Handler for the /pay_now command
+ * Handler for the /pay-now command
  * Allows users to submit transaction IDs for admin approval
  * If user is admin, it shows pending transaction submissions
  */
@@ -417,37 +429,35 @@ function handlePayNowCommand(msg) {
         const text = msg.text || '';
         const userIsAdmin = (0, utils_1.isAdmin)(chatId);
         // If admin with no arguments, show pending transactions
-        if (userIsAdmin && text.trim() === '/pay_now') {
+        if (userIsAdmin && text.trim() === '/pay-now') {
             const pendingTransactions = yield (0, storage_1.getAllPendingTransactions)();
             if (pendingTransactions.length === 0) {
-                yield (0, error_boundary_1.safeSendMessage)(chatId, '📋 *No Pending Transactions*\n\nThere are currently no transactions waiting for approval.', { parse_mode: 'Markdown' });
+                yield bot_1.bot.sendMessage(chatId, '📋 *No Pending Transactions*\n\nThere are currently no transactions waiting for approval.', { parse_mode: 'Markdown' });
                 return;
             }
             // Format a list of pending transactions
             let message = '📋 *Pending Transactions*\n\n';
             pendingTransactions.forEach((tx, index) => {
                 const date = new Date(tx.timestamp).toLocaleString();
-                // Escape transaction ID to prevent Markdown parsing issues
-                const safeTransactionId = escapeMarkdown(tx.id);
-                message += `${index + 1}. Transaction ID: \`${safeTransactionId}\`\n`;
+                message += `${index + 1}. Transaction ID: \`${tx.id}\`\n`;
                 message += `   User ID: ${tx.userId}\n`;
                 message += `   Submitted: ${date}\n\n`;
             });
             message += 'To approve or reject a transaction, use:\n';
             message += '/approve [transaction_id]\n';
             message += '/reject [transaction_id]';
-            yield (0, error_boundary_1.safeSendMessage)(chatId, message, { parse_mode: 'Markdown' });
+            yield bot_1.bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
             return;
         }
         // User submitting a new transaction
-        const transactionMatch = text.match(/\/pay_now\s+(.+)/) || null;
+        const transactionMatch = text.match(/\/pay-now\s+(.+)/) || null;
         if (!transactionMatch) {
             // No transaction ID provided, show instructions
-            yield (0, error_boundary_1.safeSendMessage)(chatId, '💸 *Transaction Submission*\n\nTo submit a transaction for approval, use:\n/pay_now [transaction_id]\n\nExample: /pay_now 97af4b72e0c98db5c1d8f5233...', {
+            yield bot_1.bot.sendMessage(chatId, '💸 *Transaction Submission*\n\nTo submit a transaction for approval, use:\n/pay-now [transaction_id]\n\nExample: /pay-now 97af4b72e0c98db5c1d8f5233...', {
                 parse_mode: 'Markdown',
                 reply_markup: {
                     inline_keyboard: [[
-                            { text: '« Back to Menu', callback_data: JSON.stringify({ method: 'back_to_menu', data: '' }) }
+                            { text: '« Back to Menu', callback_data: 'back_to_menu' }
                         ]]
                 }
             });
@@ -455,12 +465,12 @@ function handlePayNowCommand(msg) {
         }
         // Type assertion for TypeScript
         if (!transactionMatch[1]) {
-            yield (0, error_boundary_1.safeSendMessage)(chatId, 'Please provide a transaction ID. Example: /pay_now 97af4b72e0c98db5c1d8f5233...');
+            yield bot_1.bot.sendMessage(chatId, 'Please provide a transaction ID. Example: /pay-now 97af4b72e0c98db5c1d8f5233...');
             return;
         }
         const transactionId = transactionMatch[1].trim();
         if (!transactionId) {
-            yield (0, error_boundary_1.safeSendMessage)(chatId, 'Please provide a valid transaction ID.');
+            yield bot_1.bot.sendMessage(chatId, 'Please provide a valid transaction ID.');
             return;
         }
         // Check if this transaction ID has already been submitted
@@ -478,22 +488,20 @@ function handlePayNowCommand(msg) {
                     statusMessage = 'This transaction ID was previously rejected. Please submit a new transaction or contact support.';
                     break;
             }
-            yield (0, error_boundary_1.safeSendMessage)(chatId, `⚠️ *Transaction Already Exists*\n\n${statusMessage}`, { parse_mode: 'Markdown' });
+            yield bot_1.bot.sendMessage(chatId, `⚠️ *Transaction Already Exists*\n\n${statusMessage}`, { parse_mode: 'Markdown' });
             return;
         }
         // Save the new transaction submission
         yield (0, storage_1.saveTransactionSubmission)(chatId, transactionId);
         // Notify the user that their submission was received
-        yield (0, error_boundary_1.safeSendMessage)(chatId, '✅ *Transaction Submitted*\n\nYour transaction has been submitted for admin approval. You will be notified once it has been reviewed.', { parse_mode: 'Markdown' });
+        yield bot_1.bot.sendMessage(chatId, '✅ *Transaction Submitted*\n\nYour transaction has been submitted for admin approval. You will be notified once it has been reviewed.', { parse_mode: 'Markdown' });
         // Notify all admins
         const adminIds = ((_a = process.env.ADMIN_IDS) === null || _a === void 0 ? void 0 : _a.split(',').map(id => Number(id.trim()))) || [];
         for (const adminId of adminIds) {
             try {
                 const userName = msg.from ? msg.from.first_name || 'Unknown' : 'Unknown';
                 const userNameWithId = `${userName} (ID: ${chatId})`;
-                // Escape transaction ID for markdown
-                const safeTransactionId = escapeMarkdown(transactionId);
-                yield (0, error_boundary_1.safeSendMessage)(adminId, `🔔 *New Transaction Submission*\n\nFrom: ${userNameWithId}\n\nTransaction ID: \`${safeTransactionId}\`\n\nTo approve or reject, use:\n/approve ${transactionId}\n/reject ${transactionId}`, { parse_mode: 'Markdown' });
+                yield bot_1.bot.sendMessage(adminId, `🔔 *New Transaction Submission*\n\nFrom: ${userNameWithId}\n\nTransaction ID: \`${transactionId}\`\n\nTo approve or reject, use:\n/approve ${transactionId}\n/reject ${transactionId}`, { parse_mode: 'Markdown' });
             }
             catch (error) {
                 console.error(`Failed to notify admin ${adminId}:`, error);
@@ -597,37 +605,17 @@ function handleBackToMenuCallback(query) {
         if (!query.message)
             return;
         const chatId = query.message.chat.id;
-        try {
-            yield bot_1.bot.editMessageText('🔎 What would you like to do?', {
-                chat_id: chatId,
-                message_id: query.message.message_id,
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: '💼 Connect Wallet', callback_data: JSON.stringify({ method: 'connect_wallet', data: '' }) }],
-                        [{ text: '💰 Send Transaction', callback_data: JSON.stringify({ method: 'send_transaction', data: '' }) }],
-                        [{ text: '❓ Info & Help', callback_data: JSON.stringify({ method: 'show_info', data: '' }) }]
-                    ]
-                }
-            });
-        }
-        catch (error) {
-            console.error('Error displaying back to menu:', error);
-            // If editing fails (e.g., message too old), send a new message instead
-            try {
-                yield (0, error_boundary_1.safeSendMessage)(chatId, '🔎 What would you like to do?', {
-                    reply_markup: {
-                        inline_keyboard: [
-                            [{ text: '💼 Connect Wallet', callback_data: JSON.stringify({ method: 'connect_wallet', data: '' }) }],
-                            [{ text: '💰 Send Transaction', callback_data: JSON.stringify({ method: 'send_transaction', data: '' }) }],
-                            [{ text: '❓ Info & Help', callback_data: JSON.stringify({ method: 'show_info', data: '' }) }]
-                        ]
-                    }
-                });
+        yield bot_1.bot.editMessageText('🔍 What would you like to do?', {
+            chat_id: chatId,
+            message_id: query.message.message_id,
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: '💼 Connect Wallet', callback_data: 'connect_wallet' }],
+                    [{ text: '💰 Send Transaction', callback_data: 'send_transaction' }],
+                    [{ text: '❓ Info & Help', callback_data: 'show_info' }]
+                ]
             }
-            catch (sendError) {
-                console.error('Failed to send fallback menu message:', sendError);
-            }
-        }
+        });
     });
 }
 exports.handleBackToMenuCallback = handleBackToMenuCallback;
@@ -653,14 +641,6 @@ function handleWithdrawCommand(msg) {
     });
 }
 exports.handleWithdrawCommand = handleWithdrawCommand;
-/**
- * Helper function to escape Markdown special characters in text
- * @param text Text to escape
- * @returns Escaped text safe for Markdown
- */
-function escapeMarkdown(text) {
-    return text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
-}
 /**
  * Handler for the /users command (admin-only)
  * Shows all users who have interacted with the bot, including those who never connected a wallet
@@ -718,39 +698,14 @@ function handleUsersCommand(msg) {
                         console.error(`Error restoring connection for user ${user.chatId}:`, err);
                     }
                 }
-                // Format user information with display name and username for better identification
-                let userIdentification = `ID: ${user.chatId}`;
-                if (user.displayName || user.username) {
-                    userIdentification = '';
-                    // Add display name if available
-                    if (user.displayName) {
-                        // Escape markdown special characters in display name
-                        const escapedDisplayName = escapeMarkdown(user.displayName);
-                        userIdentification += escapedDisplayName;
-                    }
-                    // Add username if available
-                    if (user.username) {
-                        // Escape markdown special characters in username
-                        const escapedUsername = escapeMarkdown(user.username);
-                        if (userIdentification) {
-                            userIdentification += ` (@${escapedUsername})`;
-                        }
-                        else {
-                            userIdentification += `@${escapedUsername}`;
-                        }
-                    }
-                    // Add ID at the end
-                    userIdentification += ` (ID: ${user.chatId})`;
-                }
-                messageText += `👤 *User:* ${userIdentification}\n`;
+                // Format user information
+                messageText += `👤 *User ID:* ${user.chatId}\n`;
                 // Show wallet status
                 if (!user.walletEverConnected) {
                     messageText += `❌ *Wallet:* Never connected\n`;
                 }
                 else if (currentWalletInfo) {
-                    // Escape wallet name to prevent Markdown parsing issues
-                    const safeWalletName = escapeMarkdown(currentWalletInfo.name);
-                    messageText += `📱 *Wallet:* ${safeWalletName}\n`;
+                    messageText += `📱 *Wallet:* ${currentWalletInfo.name}\n`;
                     messageText += `📝 *Address:* \`${currentWalletInfo.address}\`\n`;
                 }
                 else {
