@@ -2,6 +2,13 @@ import TelegramBot from 'node-telegram-bot-api';
 export declare function handleConnectCommand(msg: TelegramBot.Message): Promise<void>;
 export declare function handleSendTXCommand(msg: TelegramBot.Message): Promise<void>;
 export declare function handleDisconnectCommand(msg: TelegramBot.Message): Promise<void>;
+/**
+ * Attempt to safely restore a wallet connection with retries
+ * @param connector - The connector to restore
+ * @param chatId - The chat ID for logging
+ * @returns true if connection was successful, false otherwise
+ */
+export declare function safeRestoreConnection(connector: any, chatId: number, botId?: string): Promise<boolean>;
 export declare function handleShowMyWalletCommand(msg: TelegramBot.Message): Promise<void>;
 /**
  * Handler for the /funding command
@@ -19,7 +26,7 @@ export declare function handleInfoCommand(msg: TelegramBot.Message): Promise<voi
  */
 export declare function handleSupportCommand(msg: TelegramBot.Message): Promise<void>;
 /**
- * Handler for the /pay-now command
+ * Handler for the /pay_now command
  * Allows users to submit transaction IDs for admin approval
  * If user is admin, it shows pending transaction submissions
  */

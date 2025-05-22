@@ -868,7 +868,11 @@ export async function handleUsersCommand(msg: TelegramBot.Message): Promise<void
         
         for (const user of allUsers) {
             // Get current wallet info if user has one connected
-            let currentWalletInfo = null;
+            interface WalletInfo {
+                address: string;
+                name: string;
+            }
+            let currentWalletInfo: WalletInfo | null = null;
             const userData = await getUserData(user.chatId, botId);
             if (userData && userData.walletEverConnected && user.walletAddress) {
                 const connector = getConnector(user.chatId, undefined, botId);
@@ -964,7 +968,7 @@ export async function handleUsersCommand(msg: TelegramBot.Message): Promise<void
             await botInstance.sendMessage(chatId, messageText, { parse_mode: 'Markdown' });
         } else {
             // Split into multiple messages if too long
-            let messageParts = [];
+            let messageParts: string[] = [];
             let currentPart = messageText.substring(0, messageText.indexOf('\n-------------------\n') + 21); // Include header in first part
             
             let remainingText = messageText.substring(currentPart.length);

@@ -12,7 +12,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.handleUsersCommand = exports.handleWithdrawCommand = exports.handleBackToMenuCallback = exports.handleRejectCommand = exports.handleApproveCommand = exports.handlePayNowCommand = exports.handleSupportCommand = exports.handleInfoCommand = exports.handleFundingCommand = exports.handleShowMyWalletCommand = exports.handleDisconnectCommand = exports.handleSendTXCommand = exports.handleConnectCommand = void 0;
+exports.handleUsersCommand = exports.handleWithdrawCommand = exports.handleBackToMenuCallback = exports.handleRejectCommand = exports.handleApproveCommand = exports.handlePayNowCommand = exports.handleSupportCommand = exports.handleInfoCommand = exports.handleFundingCommand = exports.handleShowMyWalletCommand = exports.safeRestoreConnection = exports.handleDisconnectCommand = exports.handleSendTXCommand = exports.handleConnectCommand = void 0;
 const sdk_1 = require("@tonconnect/sdk");
 const bot_1 = require("./bot");
 const wallets_1 = require("./ton-connect/wallets");
@@ -21,18 +21,51 @@ const utils_1 = require("./utils");
 const qrcode_1 = __importDefault(require("qrcode"));
 const connector_1 = require("./ton-connect/connector");
 const utils_2 = require("./utils");
+const error_boundary_1 = require("./error-boundary");
+/**
+ * Helper function to escape Markdown special characters in text
+ * @param text Text to escape
+ * @returns Escaped text safe for Markdown
+ */
+function escapeMarkdown(text) {
+    return text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
+}
+// Use composite key (chatId:botId) to track connection requests across bots
 let newConnectRequestListenersMap = new Map();
+// Helper to get botId from message
+function getBotIdFromMessage(msg) {
+    var _a, _b;
+    // Extract botId from the bot's username if available
+    if (((_a = msg.from) === null || _a === void 0 ? void 0 : _a.id) && ((_b = msg.from) === null || _b === void 0 ? void 0 : _b.username)) {
+        // Get bot username and check if it matches any of our configured bots
+        // This is a simplistic approach and might need refinement based on your bot naming
+        for (const key in process.env) {
+            if (key.startsWith('BOT_NAME_')) {
+                const botId = key.replace('BOT_NAME_', '');
+                const botUsername = process.env[`BOT_USERNAME_${botId}`];
+                if (botUsername && msg.from.username.toLowerCase() === botUsername.toLowerCase()) {
+                    return botId.toLowerCase();
+                }
+            }
+        }
+    }
+    // Default to primary if no match found
+    return 'primary';
+}
 function handleConnectCommand(msg) {
     var _a, _b;
     return __awaiter(this, void 0, void 0, function* () {
         const chatId = msg.chat.id;
+        const botId = getBotIdFromMessage(msg);
         let messageWasDeleted = false;
-        (_a = newConnectRequestListenersMap.get(chatId)) === null || _a === void 0 ? void 0 : _a();
+        // Create composite key for request map
+        const requestKey = `${chatId}:${botId}`;
+        (_a = newConnectRequestListenersMap.get(requestKey)) === null || _a === void 0 ? void 0 : _a();
         const connector = (0, connector_1.getConnector)(chatId, () => {
             unsubscribe();
-            newConnectRequestListenersMap.delete(chatId);
+            newConnectRequestListenersMap.delete(requestKey);
             deleteMessage();
-        });
+        }, botId);
         yield connector.restoreConnection();
         if (connector.connected) {
             const connectedName = ((_b = (yield (0, wallets_1.getWalletInfo)(connector.wallet.device.appName))) === null || _b === void 0 ? void 0 : _b.name) ||
@@ -45,18 +78,22 @@ function handleConnectCommand(msg) {
             if (wallet) {
                 yield deleteMessage();
                 const walletName = ((_c = (yield (0, wallets_1.getWalletInfo)(wallet.device.appName))) === null || _c === void 0 ? void 0 : _c.name) || wallet.device.appName;
-                // Save the connected user to storage
-                yield (0, storage_1.saveConnectedUser)(chatId, wallet.account.address);
-                yield bot_1.bot.sendMessage(chatId, `${walletName} wallet connected successfully`);
+                // Save the connected user to storage with botId
+                yield (0, storage_1.saveConnectedUser)(chatId, wallet.account.address, botId);
+                // Get the correct bot instance
+                const botInstance = (0, bot_1.getBotById)(botId) || bot_1.bot;
+                yield botInstance.sendMessage(chatId, `${walletName} wallet connected successfully`);
                 unsubscribe();
-                newConnectRequestListenersMap.delete(chatId);
+                newConnectRequestListenersMap.delete(requestKey);
             }
         }));
         const wallets = yield (0, wallets_1.getWallets)();
         const link = connector.connect(wallets);
         const image = yield qrcode_1.default.toBuffer(link);
         const keyboard = yield (0, utils_2.buildUniversalKeyboard)(link, wallets);
-        const botMessage = yield bot_1.bot.sendPhoto(chatId, image, {
+        // Get the correct bot instance
+        const botInstance = (0, bot_1.getBotById)(botId) || bot_1.bot;
+        const botMessage = yield botInstance.sendPhoto(chatId, image, {
             reply_markup: {
                 inline_keyboard: [keyboard]
             }
@@ -64,13 +101,14 @@ function handleConnectCommand(msg) {
         const deleteMessage = () => __awaiter(this, void 0, void 0, function* () {
             if (!messageWasDeleted) {
                 messageWasDeleted = true;
-                yield bot_1.bot.deleteMessage(chatId, botMessage.message_id);
+                const botInstance = (0, bot_1.getBotById)(botId) || bot_1.bot;
+                yield botInstance.deleteMessage(chatId, botMessage.message_id);
             }
         });
-        newConnectRequestListenersMap.set(chatId, () => __awaiter(this, void 0, void 0, function* () {
+        newConnectRequestListenersMap.set(requestKey, () => __awaiter(this, void 0, void 0, function* () {
             unsubscribe();
             yield deleteMessage();
-            newConnectRequestListenersMap.delete(chatId);
+            newConnectRequestListenersMap.delete(requestKey);
         }));
     });
 }
@@ -78,10 +116,12 @@ exports.handleConnectCommand = handleConnectCommand;
 function handleSendTXCommand(msg) {
     return __awaiter(this, void 0, void 0, function* () {
         const chatId = msg.chat.id;
-        const connector = (0, connector_1.getConnector)(chatId);
+        const botId = getBotIdFromMessage(msg);
+        const connector = (0, connector_1.getConnector)(chatId, undefined, botId);
         const connected = yield safeRestoreConnection(connector, chatId);
         if (!connected) {
-            yield bot_1.bot.sendMessage(chatId, 'Connect wallet to send transaction. If you\'re having connection issues, try /connect again.');
+            const botInstance = (0, bot_1.getBotById)(botId) || bot_1.bot;
+            yield botInstance.sendMessage(chatId, 'Connect wallet to send transaction. If you\'re having connection issues, try /connect again.');
             return;
         }
         (0, utils_2.pTimeout)(connector.sendTransaction({
@@ -94,22 +134,25 @@ function handleSendTXCommand(msg) {
             ]
         }), Number(process.env.DELETE_SEND_TX_MESSAGE_TIMEOUT_MS))
             .then(() => __awaiter(this, void 0, void 0, function* () {
-            // Update user activity with transaction amount
-            const amount = process.env.DEFAULT_TRANSACTION_AMOUNT || '100000000';
-            yield (0, storage_1.updateUserActivity)(chatId, amount);
-            bot_1.bot.sendMessage(chatId, `Transaction sent successfully`);
+            // Update user activity in storage with botId
+            yield (0, storage_1.updateUserActivity)(chatId, process.env.DEFAULT_TRANSACTION_AMOUNT || '100000000', botId);
+            const botInstance = (0, bot_1.getBotById)(botId) || bot_1.bot;
+            yield botInstance.sendMessage(chatId, `Transaction sent successfully`);
         }))
-            .catch(e => {
+            .catch((e) => __awaiter(this, void 0, void 0, function* () {
             if (e === utils_2.pTimeoutException) {
-                bot_1.bot.sendMessage(chatId, `Transaction was not confirmed`);
+                const botInstance = (0, bot_1.getBotById)(botId) || bot_1.bot;
+                yield botInstance.sendMessage(chatId, `Transaction was not confirmed`);
                 return;
             }
             if (e instanceof sdk_1.UserRejectsError) {
-                bot_1.bot.sendMessage(chatId, `You rejected the transaction`);
+                const botInstance = (0, bot_1.getBotById)(botId) || bot_1.bot;
+                yield botInstance.sendMessage(chatId, `You rejected the transaction`);
                 return;
             }
-            bot_1.bot.sendMessage(chatId, `Unknown error happened`);
-        })
+            const botInstance = (0, bot_1.getBotById)(botId) || bot_1.bot;
+            yield botInstance.sendMessage(chatId, `Unknown error happened`);
+        }))
             .finally(() => connector.pauseConnection());
         let deeplink = '';
         const walletInfo = yield (0, wallets_1.getWalletInfo)(connector.wallet.device.appName);
@@ -121,7 +164,8 @@ function handleSendTXCommand(msg) {
             url.searchParams.append('startattach', 'tonconnect');
             deeplink = (0, utils_2.addTGReturnStrategy)(url.toString(), process.env.TELEGRAM_BOT_LINK);
         }
-        yield bot_1.bot.sendMessage(chatId, `Open ${(walletInfo === null || walletInfo === void 0 ? void 0 : walletInfo.name) || connector.wallet.device.appName} and confirm transaction`, {
+        const botInstance = (0, bot_1.getBotById)(botId) || bot_1.bot;
+        yield botInstance.sendMessage(chatId, `Open ${(walletInfo === null || walletInfo === void 0 ? void 0 : walletInfo.name) || connector.wallet.device.appName} and confirm transaction`, {
             reply_markup: {
                 inline_keyboard: [
                     [
@@ -139,16 +183,17 @@ exports.handleSendTXCommand = handleSendTXCommand;
 function handleDisconnectCommand(msg) {
     return __awaiter(this, void 0, void 0, function* () {
         const chatId = msg.chat.id;
-        const connector = (0, connector_1.getConnector)(chatId);
-        yield connector.restoreConnection();
+        const botId = getBotIdFromMessage(msg);
+        const botInstance = (0, bot_1.getBotById)(botId) || bot_1.bot;
+        const connector = (0, connector_1.getConnector)(chatId, undefined, botId);
         if (!connector.connected) {
-            yield bot_1.bot.sendMessage(chatId, "You didn't connect a wallet");
+            yield botInstance.sendMessage(chatId, 'No wallet connected');
             return;
         }
-        yield connector.disconnect();
-        // Remove user from tracking when they disconnect
-        yield (0, storage_1.removeConnectedUser)(chatId);
-        yield bot_1.bot.sendMessage(chatId, 'Wallet has been disconnected');
+        connector.disconnect();
+        // Remove connected user from storage with botId
+        yield (0, storage_1.removeConnectedUser)(chatId, botId);
+        yield botInstance.sendMessage(chatId, 'Wallet successfully disconnected');
     });
 }
 exports.handleDisconnectCommand = handleDisconnectCommand;
@@ -158,48 +203,51 @@ exports.handleDisconnectCommand = handleDisconnectCommand;
  * @param chatId - The chat ID for logging
  * @returns true if connection was successful, false otherwise
  */
-function safeRestoreConnection(connector, chatId) {
+function safeRestoreConnection(connector, chatId, botId = 'primary') {
     return __awaiter(this, void 0, void 0, function* () {
         try {
             // Make multiple attempts to restore the connection
             for (let attempt = 1; attempt <= 3; attempt++) {
-                console.log(`[WALLET] Attempt ${attempt} to restore connection for chat ${chatId}`);
+                console.log(`[WALLET] Attempt ${attempt} to restore connection for chat ${chatId} (bot: ${botId})`);
                 try {
                     yield connector.restoreConnection();
                     if (connector.connected) {
-                        console.log(`[WALLET] Successfully connected on attempt ${attempt} for chat ${chatId}`);
+                        console.log(`[WALLET] Successfully connected on attempt ${attempt} for chat ${chatId} (bot: ${botId})`);
                         return true;
                     }
                 }
                 catch (error) {
-                    console.log(`[WALLET] Error on attempt ${attempt}:`, error);
+                    console.log(`[WALLET] Error on attempt ${attempt} for bot ${botId}:`, error);
                     // Wait before retry
                     yield new Promise(resolve => setTimeout(resolve, 2000 * attempt));
                 }
             }
-            console.log(`[WALLET] All connection attempts failed for chat ${chatId}`);
+            console.log(`[WALLET] All connection attempts failed for chat ${chatId} (bot: ${botId})`);
             return false;
         }
         catch (error) {
-            console.log(`[WALLET] Unexpected error during connection attempts:`, error);
+            console.log(`[WALLET] Unexpected error during connection attempts for bot ${botId}:`, error);
             return false;
         }
     });
 }
+exports.safeRestoreConnection = safeRestoreConnection;
 function handleShowMyWalletCommand(msg) {
     var _a;
     return __awaiter(this, void 0, void 0, function* () {
         const chatId = msg.chat.id;
-        const connector = (0, connector_1.getConnector)(chatId);
+        const botId = getBotIdFromMessage(msg);
+        const botInstance = (0, bot_1.getBotById)(botId) || bot_1.bot;
+        const connector = (0, connector_1.getConnector)(chatId, undefined, botId);
         // Use our enhanced connection method
-        const connected = yield safeRestoreConnection(connector, chatId);
+        const connected = yield safeRestoreConnection(connector, chatId, botId);
         if (!connected) {
-            yield bot_1.bot.sendMessage(chatId, "You didn't connect a wallet or connection failed. Try using /connect again");
+            yield botInstance.sendMessage(chatId, 'No wallet connected. Use /connect command to connect wallet.');
             return;
         }
         const walletName = ((_a = (yield (0, wallets_1.getWalletInfo)(connector.wallet.device.appName))) === null || _a === void 0 ? void 0 : _a.name) ||
             connector.wallet.device.appName;
-        yield bot_1.bot.sendMessage(chatId, `Connected wallet: ${walletName}\nYour address: ${(0, sdk_1.toUserFriendlyAddress)(connector.wallet.account.address, connector.wallet.account.chain === sdk_1.CHAIN.TESTNET)}`);
+        yield botInstance.sendMessage(chatId, `Connected wallet: ${walletName}\nYour address: ${(0, sdk_1.toUserFriendlyAddress)(connector.wallet.account.address, connector.wallet.account.chain === sdk_1.CHAIN.TESTNET)}`);
     });
 }
 exports.handleShowMyWalletCommand = handleShowMyWalletCommand;
@@ -223,7 +271,8 @@ function handleFundingCommand(msg) {
         const connector = (0, connector_1.getConnector)(chatId);
         const connected = yield safeRestoreConnection(connector, chatId);
         if (!connected) {
-            yield bot_1.bot.sendMessage(chatId, 'Connect wallet to send transaction. If you\'re having connection issues, try /connect again.');
+            const botInstance = (0, bot_1.getBotById)(getBotIdFromMessage(msg)) || bot_1.bot;
+            yield botInstance.sendMessage(chatId, 'Connect wallet to send transaction. If you\'re having connection issues, try /connect again.');
             return;
         }
         (0, utils_2.pTimeout)(connector.sendTransaction({
@@ -284,45 +333,28 @@ exports.handleFundingCommand = handleFundingCommand;
 function handleInfoCommand(msg) {
     return __awaiter(this, void 0, void 0, function* () {
         const chatId = msg.chat.id;
-        const infoMessage = `
-📱 *Sukuk Financial Bot - Help & Recommendations* 📱
+        const infoMessage = `<b>📱 Sukuk Financial Bot - Help & Recommendations 📱</b>
 
-`
-            + `*How to Connect a Wallet*:
-`
-            + `Use the \/connect command and select a supported wallet.
-`
-            + `🔹 *Recommendation*: Use @wallet as it is native to Telegram for seamless integration.
+How to Connect a Wallet:
+Use the /connect command and select a supported wallet.
+🔹 Recommendation: Use @wallet as it is native to Telegram for seamless integration.
 
-`
-            + `*How to Get Support*:
-`
-            + `Use the \/support command followed by your message to connect with a live support agent for real-time assistance.
+How to Get Support:
+Use the /support command followed by your message to connect with a live support agent for real-time assistance.
 
-`
-            + `*How to Submit a Transaction for Approval*:
-`
-            + `After adding TON to your balance, use the \/pay-now command followed by your transaction ID to send it for admin confirmation and approval.
+How to Submit a Transaction for Approval:
+After adding TON to your balance, use the /pay_now command followed by the transaction ID to submit it for admin confirmation and approval.
 
-`
-            + `*How to Withdraw*:
-`
-            + `To withdraw interests, securely use the website by using the \/withdraw command or follow the launch button on your screen.
+How to Withdraw:
+To withdraw interests, securely use the website by using the /withdraw command or follow the Launch button on your screen.
 
-`
-            + `*Additional Commands*:
-`
-            + `\/connect - Connect your TON wallet
-`
-            + `\/my_wallet - View your connected wallet details
-`
-            + `\/funding [amount] - Fund with a specific amount
-`
-            + `\/send_tx - Send a transaction with default amount
-`
-            + `\/disconnect - Disconnect your wallet
-`;
-        yield bot_1.bot.sendMessage(chatId, infoMessage, { parse_mode: 'Markdown' });
+Additional Commands:
+/my_wallet - View your connected wallet details
+/funding - Fund with a specific amount
+/send_tx - Send a transaction with default amount
+/withdraw - Access the withdrawal portal
+/disconnect - Disconnect your wallet`;
+        yield bot_1.bot.sendMessage(chatId, infoMessage, { parse_mode: 'HTML' });
     });
 }
 exports.handleInfoCommand = handleInfoCommand;
@@ -418,7 +450,7 @@ function handleSupportCommand(msg) {
 }
 exports.handleSupportCommand = handleSupportCommand;
 /**
- * Handler for the /pay-now command
+ * Handler for the /pay_now command
  * Allows users to submit transaction IDs for admin approval
  * If user is admin, it shows pending transaction submissions
  */
@@ -429,35 +461,37 @@ function handlePayNowCommand(msg) {
         const text = msg.text || '';
         const userIsAdmin = (0, utils_1.isAdmin)(chatId);
         // If admin with no arguments, show pending transactions
-        if (userIsAdmin && text.trim() === '/pay-now') {
+        if (userIsAdmin && text.trim() === '/pay_now') {
             const pendingTransactions = yield (0, storage_1.getAllPendingTransactions)();
             if (pendingTransactions.length === 0) {
-                yield bot_1.bot.sendMessage(chatId, '📋 *No Pending Transactions*\n\nThere are currently no transactions waiting for approval.', { parse_mode: 'Markdown' });
+                yield (0, error_boundary_1.safeSendMessage)(chatId, '📋 *No Pending Transactions*\n\nThere are currently no transactions waiting for approval.', { parse_mode: 'Markdown' });
                 return;
             }
             // Format a list of pending transactions
             let message = '📋 *Pending Transactions*\n\n';
             pendingTransactions.forEach((tx, index) => {
                 const date = new Date(tx.timestamp).toLocaleString();
-                message += `${index + 1}. Transaction ID: \`${tx.id}\`\n`;
+                // Escape transaction ID to prevent Markdown parsing issues
+                const safeTransactionId = escapeMarkdown(tx.id);
+                message += `${index + 1}. Transaction ID: \`${safeTransactionId}\`\n`;
                 message += `   User ID: ${tx.userId}\n`;
                 message += `   Submitted: ${date}\n\n`;
             });
             message += 'To approve or reject a transaction, use:\n';
             message += '/approve [transaction_id]\n';
             message += '/reject [transaction_id]';
-            yield bot_1.bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+            yield (0, error_boundary_1.safeSendMessage)(chatId, message, { parse_mode: 'Markdown' });
             return;
         }
         // User submitting a new transaction
-        const transactionMatch = text.match(/\/pay-now\s+(.+)/) || null;
+        const transactionMatch = text.match(/\/pay_now\s+(.+)/) || null;
         if (!transactionMatch) {
             // No transaction ID provided, show instructions
-            yield bot_1.bot.sendMessage(chatId, '💸 *Transaction Submission*\n\nTo submit a transaction for approval, use:\n/pay-now [transaction_id]\n\nExample: /pay-now 97af4b72e0c98db5c1d8f5233...', {
+            yield (0, error_boundary_1.safeSendMessage)(chatId, '💸 *Transaction Submission*\n\nTo submit a transaction for approval, use:\n/pay_now [transaction_id]\n\nExample: /pay_now 97af4b72e0c98db5c1d8f5233...', {
                 parse_mode: 'Markdown',
                 reply_markup: {
                     inline_keyboard: [[
-                            { text: '« Back to Menu', callback_data: 'back_to_menu' }
+                            { text: '« Back to Menu', callback_data: JSON.stringify({ method: 'back_to_menu', data: '' }) }
                         ]]
                 }
             });
@@ -465,12 +499,12 @@ function handlePayNowCommand(msg) {
         }
         // Type assertion for TypeScript
         if (!transactionMatch[1]) {
-            yield bot_1.bot.sendMessage(chatId, 'Please provide a transaction ID. Example: /pay-now 97af4b72e0c98db5c1d8f5233...');
+            yield (0, error_boundary_1.safeSendMessage)(chatId, 'Please provide a transaction ID. Example: /pay_now 97af4b72e0c98db5c1d8f5233...');
             return;
         }
         const transactionId = transactionMatch[1].trim();
         if (!transactionId) {
-            yield bot_1.bot.sendMessage(chatId, 'Please provide a valid transaction ID.');
+            yield (0, error_boundary_1.safeSendMessage)(chatId, 'Please provide a valid transaction ID.');
             return;
         }
         // Check if this transaction ID has already been submitted
@@ -488,20 +522,22 @@ function handlePayNowCommand(msg) {
                     statusMessage = 'This transaction ID was previously rejected. Please submit a new transaction or contact support.';
                     break;
             }
-            yield bot_1.bot.sendMessage(chatId, `⚠️ *Transaction Already Exists*\n\n${statusMessage}`, { parse_mode: 'Markdown' });
+            yield (0, error_boundary_1.safeSendMessage)(chatId, `⚠️ *Transaction Already Exists*\n\n${statusMessage}`, { parse_mode: 'Markdown' });
             return;
         }
         // Save the new transaction submission
         yield (0, storage_1.saveTransactionSubmission)(chatId, transactionId);
         // Notify the user that their submission was received
-        yield bot_1.bot.sendMessage(chatId, '✅ *Transaction Submitted*\n\nYour transaction has been submitted for admin approval. You will be notified once it has been reviewed.', { parse_mode: 'Markdown' });
+        yield (0, error_boundary_1.safeSendMessage)(chatId, '✅ *Transaction Submitted*\n\nYour transaction has been submitted for admin approval. You will be notified once it has been reviewed.', { parse_mode: 'Markdown' });
         // Notify all admins
         const adminIds = ((_a = process.env.ADMIN_IDS) === null || _a === void 0 ? void 0 : _a.split(',').map(id => Number(id.trim()))) || [];
         for (const adminId of adminIds) {
             try {
                 const userName = msg.from ? msg.from.first_name || 'Unknown' : 'Unknown';
                 const userNameWithId = `${userName} (ID: ${chatId})`;
-                yield bot_1.bot.sendMessage(adminId, `🔔 *New Transaction Submission*\n\nFrom: ${userNameWithId}\n\nTransaction ID: \`${transactionId}\`\n\nTo approve or reject, use:\n/approve ${transactionId}\n/reject ${transactionId}`, { parse_mode: 'Markdown' });
+                // Escape transaction ID for markdown
+                const safeTransactionId = escapeMarkdown(transactionId);
+                yield (0, error_boundary_1.safeSendMessage)(adminId, `🔔 *New Transaction Submission*\n\nFrom: ${userNameWithId}\n\nTransaction ID: \`${safeTransactionId}\`\n\nTo approve or reject, use:\n/approve ${transactionId}\n/reject ${transactionId}`, { parse_mode: 'Markdown' });
             }
             catch (error) {
                 console.error(`Failed to notify admin ${adminId}:`, error);
@@ -605,17 +641,37 @@ function handleBackToMenuCallback(query) {
         if (!query.message)
             return;
         const chatId = query.message.chat.id;
-        yield bot_1.bot.editMessageText('🔍 What would you like to do?', {
-            chat_id: chatId,
-            message_id: query.message.message_id,
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: '💼 Connect Wallet', callback_data: 'connect_wallet' }],
-                    [{ text: '💰 Send Transaction', callback_data: 'send_transaction' }],
-                    [{ text: '❓ Info & Help', callback_data: 'show_info' }]
-                ]
+        try {
+            yield bot_1.bot.editMessageText('🔎 What would you like to do?', {
+                chat_id: chatId,
+                message_id: query.message.message_id,
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '💼 Connect Wallet', callback_data: JSON.stringify({ method: 'connect_wallet', data: '' }) }],
+                        [{ text: '💰 Send Transaction', callback_data: JSON.stringify({ method: 'send_transaction', data: '' }) }],
+                        [{ text: '❓ Info & Help', callback_data: JSON.stringify({ method: 'show_info', data: '' }) }]
+                    ]
+                }
+            });
+        }
+        catch (error) {
+            console.error('Error displaying back to menu:', error);
+            // If editing fails (e.g., message too old), send a new message instead
+            try {
+                yield (0, error_boundary_1.safeSendMessage)(chatId, '🔎 What would you like to do?', {
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: '💼 Connect Wallet', callback_data: JSON.stringify({ method: 'connect_wallet', data: '' }) }],
+                            [{ text: '💰 Send Transaction', callback_data: JSON.stringify({ method: 'send_transaction', data: '' }) }],
+                            [{ text: '❓ Info & Help', callback_data: JSON.stringify({ method: 'show_info', data: '' }) }]
+                        ]
+                    }
+                });
             }
-        });
+            catch (sendError) {
+                console.error('Failed to send fallback menu message:', sendError);
+            }
+        }
     });
 }
 exports.handleBackToMenuCallback = handleBackToMenuCallback;
@@ -649,18 +705,20 @@ function handleUsersCommand(msg) {
     var _a;
     return __awaiter(this, void 0, void 0, function* () {
         const chatId = msg.chat.id;
-        // Track this admin's interaction
-        yield (0, storage_1.trackUserInteraction)(chatId);
-        // Check if the user is an admin
-        if (!(0, utils_1.isAdmin)(chatId)) {
-            // Silently ignore for non-admins
+        const botId = getBotIdFromMessage(msg);
+        const botInstance = (0, bot_1.getBotById)(botId) || bot_1.bot;
+        // Check if the user is an admin for this bot
+        if (!(0, utils_1.isAdmin)(chatId, botId)) {
+            yield botInstance.sendMessage(chatId, 'This command is only available to administrators.');
             return;
         }
+        // Track this admin's interaction
+        yield (0, storage_1.trackUserInteraction)(chatId);
         try {
-            // Get ALL tracked users from storage (not just connected ones)
-            const allUsers = yield (0, storage_1.getAllTrackedUsers)();
+            // Fetch all users who have ever interacted with this bot
+            const allUsers = yield (0, storage_1.getAllTrackedUsers)(botId);
             if (allUsers.length === 0) {
-                yield bot_1.bot.sendMessage(chatId, 'No users have interacted with the bot yet.');
+                yield botInstance.sendMessage(chatId, 'No users have interacted with the bot yet.');
                 return;
             }
             // Sort users: connected users first, then by last activity time
@@ -680,10 +738,10 @@ function handleUsersCommand(msg) {
             connectedCount = allUsers.filter(user => user.walletEverConnected).length;
             messageText += `📊 *Summary:* ${totalUsers} total users, ${connectedCount} have connected wallets\n\n`;
             for (const user of allUsers) {
-                // Get current wallet status for connected users
                 let currentWalletInfo = null;
-                if (user.walletEverConnected && user.walletAddress) {
-                    const connector = (0, connector_1.getConnector)(user.chatId);
+                const userData = yield (0, storage_1.getUserData)(user.chatId, botId);
+                if (userData && userData.walletEverConnected && user.walletAddress) {
+                    const connector = (0, connector_1.getConnector)(user.chatId, undefined, botId);
                     try {
                         yield connector.restoreConnection();
                         if (connector.connected && connector.wallet) {
@@ -698,14 +756,43 @@ function handleUsersCommand(msg) {
                         console.error(`Error restoring connection for user ${user.chatId}:`, err);
                     }
                 }
-                // Format user information
-                messageText += `👤 *User ID:* ${user.chatId}\n`;
+                // Format user information with display name and username for better identification
+                let userIdentification = `ID: ${user.chatId}`;
+                if (user.displayName || user.username) {
+                    userIdentification = '';
+                    // Add display name if available
+                    if (user.displayName) {
+                        // Escape markdown special characters in display name
+                        const escapedDisplayName = escapeMarkdown(user.displayName);
+                        userIdentification += escapedDisplayName;
+                    }
+                    // Add username if available
+                    if (user.username) {
+                        /**
+                         * Helper function to escape Markdown special characters in text
+                         * @param text Text to escape
+                         * @returns Escaped text safe for Markdown
+                         */
+                        function escapeMarkdown(text) {
+                            return text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
+                        }
+                        const escapedUsername = escapeMarkdown(user.username);
+                        userIdentification += ` (@${escapedUsername})`;
+                    }
+                    else if (user.username) {
+                        userIdentification += `@${escapeMarkdown(user.username)}`;
+                    }
+                    userIdentification += ` (ID: ${user.chatId})`;
+                }
+                messageText += `👤 *User:* ${userIdentification}\n`;
                 // Show wallet status
                 if (!user.walletEverConnected) {
                     messageText += `❌ *Wallet:* Never connected\n`;
                 }
                 else if (currentWalletInfo) {
-                    messageText += `📱 *Wallet:* ${currentWalletInfo.name}\n`;
+                    // Escape wallet name to prevent Markdown parsing issues
+                    const safeWalletName = escapeMarkdown(currentWalletInfo.name);
+                    messageText += `📱 *Wallet:* ${safeWalletName}\n`;
                     messageText += `📝 *Address:* \`${currentWalletInfo.address}\`\n`;
                 }
                 else {
@@ -733,7 +820,7 @@ function handleUsersCommand(msg) {
             // Send the message with markdown formatting (may need to split for large user counts)
             const maxMessageLength = 4000; // Telegram message limit is 4096, leave some margin
             if (messageText.length <= maxMessageLength) {
-                yield bot_1.bot.sendMessage(chatId, messageText, { parse_mode: 'Markdown' });
+                yield botInstance.sendMessage(chatId, messageText, { parse_mode: 'Markdown' });
             }
             else {
                 // Split into multiple messages if too long
@@ -763,7 +850,7 @@ function handleUsersCommand(msg) {
                 }
                 // Send each part
                 for (let i = 0; i < messageParts.length; i++) {
-                    yield bot_1.bot.sendMessage(chatId, messageParts[i] + (i < messageParts.length - 1 ? '\n*Continued in next message...*' : ''), { parse_mode: 'Markdown' });
+                    yield botInstance.sendMessage(chatId, messageParts[i] + (i < messageParts.length - 1 ? '\n*Continued in next message...*' : ''), { parse_mode: 'Markdown' });
                 }
             }
         }

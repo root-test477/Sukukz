@@ -36,7 +36,13 @@ exports.TonConnectStorage = exports.getSupportMessagesForUser = exports.saveSupp
 const redis_1 = require("redis");
 const process = __importStar(require("process"));
 const DEBUG = process.env.DEBUG_MODE === 'true';
-const client = (0, redis_1.createClient)({ url: process.env.REDIS_URL });
+const client = (0, redis_1.createClient)({
+    url: process.env.REDIS_URL || 'redis://localhost:6379',
+    socket: {
+        connectTimeout: 10000,
+        keepAlive: 10000
+    }
+});
 client.on('error', err => console.log('Redis Client Error', err));
 function initRedisClient() {
     return __awaiter(this, void 0, void 0, function* () {
@@ -47,61 +53,86 @@ exports.initRedisClient = initRedisClient;
 // Static methods for user tracking
 /**
  * Track any user interaction with the bot, even if they haven't connected a wallet
+ * @param chatId User's chat ID
+ * @param displayName Optional display name of the user
+ * @param username Optional username of the user (without @ symbol)
+ * @param botId Optional ID of the bot the user is interacting with
  */
-function trackUserInteraction(chatId) {
+function trackUserInteraction(chatId, displayName, username, botId = 'primary') {
     return __awaiter(this, void 0, void 0, function* () {
         const now = Date.now();
+        // Use a composite key that includes both user ID and bot ID
+        const userKey = `${chatId}:${botId}`;
         // Check if user already exists in any tracking system
-        const existingUserData = yield client.hGet('all_users', chatId.toString());
-        const connectedUserData = yield client.hGet('connected_users', chatId.toString());
+        const existingUserData = yield client.hGet('all_users', userKey);
+        const connectedUserData = yield client.hGet('connected_users', userKey);
         if (existingUserData) {
-            // User already tracked, just update lastActivity
+            // User already tracked, update lastActivity, displayName and username if provided
             const userData = JSON.parse(existingUserData);
             userData.lastActivity = now;
-            yield client.hSet('all_users', chatId.toString(), JSON.stringify(userData));
+            // Update display name if provided and different from current
+            if (displayName && userData.displayName !== displayName) {
+                userData.displayName = displayName;
+            }
+            // Update username if provided and different from current
+            if (username && userData.username !== username) {
+                userData.username = username;
+            }
+            yield client.hSet('all_users', userKey, JSON.stringify(userData));
         }
         else {
             // New user, create record
             const userData = {
                 chatId,
+                botId,
+                displayName: displayName || undefined,
+                username: username || undefined,
                 firstSeenTimestamp: now,
                 connectionTimestamp: 0,
                 lastActivity: now,
                 walletEverConnected: false
             };
-            yield client.hSet('all_users', chatId.toString(), JSON.stringify(userData));
+            yield client.hSet('all_users', userKey, JSON.stringify(userData));
             if (DEBUG) {
-                console.log(`[STORAGE] Tracked new user: ${chatId}`);
+                console.log(`[STORAGE] Tracked new user: ${chatId} on bot ${botId}`);
             }
         }
         // If user already has a wallet connection, make sure they're marked as connected in all_users too
         if (connectedUserData && !existingUserData) {
             const connData = JSON.parse(connectedUserData);
             connData.walletEverConnected = true;
-            yield client.hSet('all_users', chatId.toString(), JSON.stringify(connData));
+            connData.botId = botId;
+            yield client.hSet('all_users', userKey, JSON.stringify(connData));
         }
     });
 }
 exports.trackUserInteraction = trackUserInteraction;
 /**
  * Save a user who has connected a wallet
+ * @param chatId User's chat ID
+ * @param walletAddress The wallet address to save
+ * @param botId Optional ID of the bot the user is interacting with
  */
-function saveConnectedUser(chatId, walletAddress) {
+function saveConnectedUser(chatId, walletAddress, botId = 'primary') {
     return __awaiter(this, void 0, void 0, function* () {
         const now = Date.now();
+        // Use a composite key that includes both user ID and bot ID
+        const userKey = `${chatId}:${botId}`;
         // Get existing user data if any
         let userData;
-        const existingUserData = yield client.hGet('all_users', chatId.toString());
+        const existingUserData = yield client.hGet('all_users', userKey);
         if (existingUserData) {
             userData = JSON.parse(existingUserData);
             userData.walletAddress = walletAddress;
             userData.connectionTimestamp = now;
             userData.lastActivity = now;
             userData.walletEverConnected = true;
+            userData.botId = botId;
         }
         else {
             userData = {
                 chatId,
+                botId,
                 walletAddress,
                 connectionTimestamp: now,
                 lastActivity: now,
@@ -109,64 +140,84 @@ function saveConnectedUser(chatId, walletAddress) {
                 walletEverConnected: true
             };
         }
-        // Update both connected_users and all_users
-        yield client.hSet('connected_users', chatId.toString(), JSON.stringify(userData));
-        yield client.hSet('all_users', chatId.toString(), JSON.stringify(userData));
+        yield client.hSet('connected_users', userKey, JSON.stringify(userData));
+        yield client.hSet('all_users', userKey, JSON.stringify(userData));
         if (DEBUG) {
-            console.log(`[STORAGE] Saved connected user: ${chatId} with wallet ${walletAddress}`);
+            console.log(`[STORAGE] Connected user ${chatId} on bot ${botId} with wallet ${walletAddress}`);
         }
     });
 }
 exports.saveConnectedUser = saveConnectedUser;
-function updateUserActivity(chatId, transactionAmount) {
+function updateUserActivity(chatId, transactionAmount, botId = 'primary') {
     return __awaiter(this, void 0, void 0, function* () {
-        const userData = yield getUserData(chatId);
-        if (userData) {
+        const userKey = `${chatId}:${botId}`;
+        const connectedUserData = yield client.hGet('connected_users', userKey);
+        const allUserData = yield client.hGet('all_users', userKey);
+        if (connectedUserData) {
+            const userData = JSON.parse(connectedUserData);
             userData.lastActivity = Date.now();
-            if (transactionAmount) {
+            if (transactionAmount)
                 userData.lastTransactionAmount = transactionAmount;
-            }
-            yield client.hSet('connected_users', chatId.toString(), JSON.stringify(userData));
-            if (DEBUG) {
-                console.log(`[STORAGE] Updated user activity: ${chatId}`);
-            }
+            yield client.hSet('connected_users', userKey, JSON.stringify(userData));
+        }
+        if (allUserData) {
+            const userData = JSON.parse(allUserData);
+            userData.lastActivity = Date.now();
+            if (transactionAmount)
+                userData.lastTransactionAmount = transactionAmount;
+            yield client.hSet('all_users', userKey, JSON.stringify(userData));
         }
     });
 }
 exports.updateUserActivity = updateUserActivity;
-function removeConnectedUser(chatId) {
+function removeConnectedUser(chatId, botId = 'primary') {
     return __awaiter(this, void 0, void 0, function* () {
-        yield client.hDel('connected_users', chatId.toString());
+        const userKey = `${chatId}:${botId}`;
+        yield client.hDel('connected_users', userKey);
         if (DEBUG) {
             console.log(`[STORAGE] Removed connected user: ${chatId}`);
         }
     });
 }
 exports.removeConnectedUser = removeConnectedUser;
-function getUserData(chatId) {
+function getUserData(chatId, botId = 'primary') {
     return __awaiter(this, void 0, void 0, function* () {
-        const data = yield client.hGet('connected_users', chatId.toString());
-        if (data) {
-            return JSON.parse(data);
+        const userKey = `${chatId}:${botId}`;
+        // First check connected users
+        const connectedData = yield client.hGet('connected_users', userKey);
+        if (connectedData) {
+            return JSON.parse(connectedData);
         }
-        return null;
+        // Then check all users
+        const userData = yield client.hGet('all_users', userKey);
+        return userData ? JSON.parse(userData) : null;
     });
 }
 exports.getUserData = getUserData;
-function getAllConnectedUsers() {
+function getAllConnectedUsers(botId) {
     return __awaiter(this, void 0, void 0, function* () {
         const users = yield client.hGetAll('connected_users');
-        return Object.values(users).map(userData => JSON.parse(userData));
+        const result = Object.values(users).map(userData => JSON.parse(userData));
+        // If botId is provided, filter users by that bot
+        if (botId) {
+            return result.filter(user => user.botId === botId);
+        }
+        return result;
     });
 }
 exports.getAllConnectedUsers = getAllConnectedUsers;
 /**
  * Get all users who have ever interacted with the bot
  */
-function getAllTrackedUsers() {
+function getAllTrackedUsers(botId) {
     return __awaiter(this, void 0, void 0, function* () {
-        const users = yield client.hGetAll('all_users');
-        return Object.values(users).map(userData => JSON.parse(userData));
+        const allUsers = yield client.hGetAll('all_users');
+        const users = Object.values(allUsers).map(data => JSON.parse(data));
+        // If botId is provided, filter users by that bot
+        if (botId) {
+            return users.filter(user => user.botId === botId);
+        }
+        return users;
     });
 }
 exports.getAllTrackedUsers = getAllTrackedUsers;
@@ -250,11 +301,12 @@ function getSupportMessagesForUser(userId) {
 }
 exports.getSupportMessagesForUser = getSupportMessagesForUser;
 class TonConnectStorage {
-    constructor(chatId) {
+    constructor(chatId, botId = 'primary') {
         this.chatId = chatId;
+        this.botId = botId;
     }
     getKey(key) {
-        return this.chatId.toString() + key;
+        return `${this.chatId}:${this.botId}:${key}`;
     }
     removeItem(key) {
         return __awaiter(this, void 0, void 0, function* () {
