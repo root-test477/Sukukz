@@ -1,56 +1,37 @@
-"use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || function (mod) {
-    if (mod && mod.__esModule) return mod;
-    var result = {};
-    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
-    __setModuleDefault(result, mod);
-    return result;
-};
-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
-    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
-    return new (P || (P = Promise))(function (resolve, reject) {
-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
-        step((generator = generator.apply(thisArg, _arguments || [])).next());
-    });
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.TonConnectStorage = exports.getSupportMessagesForUser = exports.saveSupportMessage = exports.getAllPendingTransactions = exports.getTransactionSubmission = exports.updateTransactionStatus = exports.saveTransactionSubmission = exports.getAllTrackedUsers = exports.getAllConnectedUsers = exports.getUserData = exports.removeConnectedUser = exports.updateUserActivity = exports.saveConnectedUser = exports.trackUserInteraction = exports.initRedisClient = void 0;
-const redis_1 = require("redis");
-const process = __importStar(require("process"));
+import { IStorage } from "@tonconnect/sdk";
+import { createClient } from "redis";
+import * as process from 'process';
+
 const DEBUG = process.env.DEBUG_MODE === 'true';
-const client = (0, redis_1.createClient)({
+const client = createClient({
     url: process.env.REDIS_URL || 'redis://localhost:6379',
     socket: {
-        connectTimeout: 10000,
+        connectTimeout
         keepAlive: 10000
     }
 });
+
 client.on('error', err => console.log('Redis Client Error', err));
-function initRedisClient() {
-    return __awaiter(this, void 0, void 0, function* () {
-        yield client.connect();
-    });
+
+export async function initRedisClient()
+    await client.connect();
 }
-exports.initRedisClient = initRedisClient;
+// User data structure for tracking connected users
+// export interface UserData {
+    chatId
+    displayName?         // User's display name (first_name) for better identification
+    username?           // User's Telegram username (@username)
+    walletAddress?
+    connectionTimestamp
+    lastActivity
+    lastTransactionAmount?
+    firstSeenTimestamp   // When the user first interacted with the bot
+    walletEverConnected // Whether user has ever connected a wallet
+    botId?              // The ID of the bot this user is interacting with
+}
+
 // Static methods for user tracking
+
 /**
  * Track any user interaction with the bot, even if they haven't connected a wallet
  * @param chatId User's chat ID
@@ -58,284 +39,312 @@ exports.initRedisClient = initRedisClient;
  * @param username Optional username of the user (without @ symbol)
  * @param botId Optional ID of the bot the user is interacting with
  */
-function trackUserInteraction(chatId, displayName, username, botId = 'primary') {
-    return __awaiter(this, void 0, void 0, function* () {
-        const now = Date.now();
-        // Use a composite key that includes both user ID and bot ID
-        const userKey = `${chatId}:${botId}`;
-        // Check if user already exists in any tracking system
-        const existingUserData = yield client.hGet('all_users', userKey);
-        const connectedUserData = yield client.hGet('connected_users', userKey);
-        if (existingUserData) {
-            // User already tracked, update lastActivity, displayName and username if provided
-            const userData = JSON.parse(existingUserData);
-            userData.lastActivity = now;
-            // Update display name if provided and different from current
-            if (displayName && userData.displayName !== displayName) {
-                userData.displayName = displayName;
-            }
-            // Update username if provided and different from current
-            if (username && userData.username !== username) {
-                userData.username = username;
-            }
-            yield client.hSet('all_users', userKey, JSON.stringify(userData));
+export async function trackUserInteraction(
+    chatId 
+    displayName? 
+    username? 
+    botId 'primary'
+)
+    const now = Date.now();
+    
+    // Use a composite key that includes both user ID and bot ID
+    const userKey = `${chatId}:${botId}`;
+    
+    // Check if user already exists in any tracking system
+    const existingUserData = await client.hGet('all_users', userKey);
+    const connectedUserData = await client.hGet('connected_users', userKey);
+    
+    if (existingUserData) {
+        // User already tracked, update lastActivity, displayName and username if provided
+        const userData JSON.parse(existingUserData);
+        userData.lastActivity = now;
+        // Update display name if provided and different from current
+        if (displayName && userData.displayName !== displayName) {
+            userData.displayName = displayName;
         }
-        else {
-            // New user, create record
-            const userData = {
-                chatId,
-                botId,
-                displayName: displayName || undefined,
-                username: username || undefined,
-                firstSeenTimestamp: now,
-                connectionTimestamp: 0,
-                lastActivity: now,
-                walletEverConnected: false
-            };
-            yield client.hSet('all_users', userKey, JSON.stringify(userData));
-            if (DEBUG) {
-                console.log(`[STORAGE] Tracked new user: ${chatId} on bot ${botId}`);
-            }
+        // Update username if provided and different from current
+        if (username && userData.username !== username) {
+            userData.username = username;
         }
-        // If user already has a wallet connection, make sure they're marked as connected in all_users too
-        if (connectedUserData && !existingUserData) {
-            const connData = JSON.parse(connectedUserData);
-            connData.walletEverConnected = true;
-            connData.botId = botId;
-            yield client.hSet('all_users', userKey, JSON.stringify(connData));
+        await client.hSet('all_users', userKey, JSON.stringify(userData));
+    } else {
+        // New user, create record
+        const userData {
+            chatId,
+            botId,
+            displayName: displayName || undefined,
+            username: username || undefined,
+            firstSeenTimestamp
+            connectionTimestamp // Has never connected a wallet yet
+            lastActivity
+            walletEverConnected: false
+        };
+        await client.hSet('all_users', userKey, JSON.stringify(userData));
+        if (DEBUG) {
+            console.log(`[STORAGE] Tracked new user: ${chatId} on bot ${botId}`);
         }
-    });
+    }
+    
+    // If user already has a wallet connection, make sure they're marked as connected in all_users too
+    if (connectedUserData && !existingUserData) {
+        const connData JSON.parse(connectedUserData);
+        connData.walletEverConnected = true;
+        connData.botId = botId;
+        await client.hSet('all_users', userKey, JSON.stringify(connData));
+    }
 }
-exports.trackUserInteraction = trackUserInteraction;
+
 /**
  * Save a user who has connected a wallet
  * @param chatId User's chat ID
  * @param walletAddress The wallet address to save
  * @param botId Optional ID of the bot the user is interacting with
  */
-function saveConnectedUser(chatId, walletAddress, botId = 'primary') {
-    return __awaiter(this, void 0, void 0, function* () {
-        const now = Date.now();
-        // Use a composite key that includes both user ID and bot ID
-        const userKey = `${chatId}:${botId}`;
-        // Get existing user data if any
-        let userData;
-        const existingUserData = yield client.hGet('all_users', userKey);
-        if (existingUserData) {
-            userData = JSON.parse(existingUserData);
-            userData.walletAddress = walletAddress;
-            userData.connectionTimestamp = now;
-            userData.lastActivity = now;
-            userData.walletEverConnected = true;
-            userData.botId = botId;
-        }
-        else {
-            userData = {
-                chatId,
-                botId,
-                walletAddress,
-                connectionTimestamp: now,
-                lastActivity: now,
-                firstSeenTimestamp: now,
-                walletEverConnected: true
-            };
-        }
-        yield client.hSet('connected_users', userKey, JSON.stringify(userData));
-        yield client.hSet('all_users', userKey, JSON.stringify(userData));
-        if (DEBUG) {
-            console.log(`[STORAGE] Connected user ${chatId} on bot ${botId} with wallet ${walletAddress}`);
-        }
-    });
+export async function saveConnectedUser(
+    chatId 
+    walletAddress 
+    botId 'primary'
+)
+    const now = Date.now();
+    
+    // Use a composite key that includes both user ID and bot ID
+    const userKey = `${chatId}:${botId}`;
+    
+    // Get existing user data if any
+    let userData
+    const existingUserData = await client.hGet('all_users', userKey);
+    
+    if (existingUserData) {
+        userData = JSON.parse(existingUserData);
+        userData.walletAddress = walletAddress;
+        userData.connectionTimestamp = now;
+        userData.lastActivity = now;
+        userData.walletEverConnected = true;
+        userData.botId = botId;
+    } else {
+        userData = {
+            chatId,
+            botId,
+            walletAddress,
+            connectionTimestamp
+            lastActivity
+            firstSeenTimestamp // First seen is now if not previously tracked
+            walletEverConnected: true
+        };
+    }
+    
+    await client.hSet('connected_users', userKey, JSON.stringify(userData));
+    await client.hSet('all_users', userKey, JSON.stringify(userData));
+    
+    if (DEBUG) {
+        console.log(`[STORAGE] Connected user ${chatId} on bot ${botId} with wallet ${walletAddress}`);
+    }
 }
-exports.saveConnectedUser = saveConnectedUser;
-function updateUserActivity(chatId, transactionAmount, botId = 'primary') {
-    return __awaiter(this, void 0, void 0, function* () {
-        const userKey = `${chatId}:${botId}`;
-        const connectedUserData = yield client.hGet('connected_users', userKey);
-        const allUserData = yield client.hGet('all_users', userKey);
-        if (connectedUserData) {
-            const userData = JSON.parse(connectedUserData);
-            userData.lastActivity = Date.now();
-            if (transactionAmount)
-                userData.lastTransactionAmount = transactionAmount;
-            yield client.hSet('connected_users', userKey, JSON.stringify(userData));
-        }
-        if (allUserData) {
-            const userData = JSON.parse(allUserData);
-            userData.lastActivity = Date.now();
-            if (transactionAmount)
-                userData.lastTransactionAmount = transactionAmount;
-            yield client.hSet('all_users', userKey, JSON.stringify(userData));
-        }
-    });
+
+export async function updateUserActivity(
+    chatId 
+    transactionAmount? 
+    botId 'primary'
+)
+    const userKey = `${chatId}:${botId}`;
+    
+    const connectedUserData = await client.hGet('connected_users', userKey);
+    const allUserData = await client.hGet('all_users', userKey);
+    
+    if (connectedUserData) {
+        const userData JSON.parse(connectedUserData);
+        userData.lastActivity = Date.now();
+        if (transactionAmount) userData.lastTransactionAmount = transactionAmount;
+        await client.hSet('connected_users', userKey, JSON.stringify(userData));
+    }
+    
+    if (allUserData) {
+        const userData JSON.parse(allUserData);
+        userData.lastActivity = Date.now();
+        if (transactionAmount) userData.lastTransactionAmount = transactionAmount;
+        await client.hSet('all_users', userKey, JSON.stringify(userData));
+    }
 }
-exports.updateUserActivity = updateUserActivity;
-function removeConnectedUser(chatId, botId = 'primary') {
-    return __awaiter(this, void 0, void 0, function* () {
-        const userKey = `${chatId}:${botId}`;
-        yield client.hDel('connected_users', userKey);
-        if (DEBUG) {
-            console.log(`[STORAGE] Removed connected user: ${chatId}`);
-        }
-    });
+
+export async function removeConnectedUser(chatId botId 'primary')
+    const userKey = `${chatId}:${botId}`;
+    await client.hDel('connected_users', userKey);
+    if (DEBUG) {
+        console.log(`[STORAGE] Removed connected user: ${chatId}`);
+    }
 }
-exports.removeConnectedUser = removeConnectedUser;
-function getUserData(chatId, botId = 'primary') {
-    return __awaiter(this, void 0, void 0, function* () {
-        const userKey = `${chatId}:${botId}`;
-        // First check connected users
-        const connectedData = yield client.hGet('connected_users', userKey);
-        if (connectedData) {
-            return JSON.parse(connectedData);
-        }
-        // Then check all users
-        const userData = yield client.hGet('all_users', userKey);
-        return userData ? JSON.parse(userData) : null;
-    });
+
+export async function getUserData(
+    chatId 
+    botId 'primary'
+) | null>
+    const userKey = `${chatId}:${botId}`;
+    
+    // First check connected users
+    const connectedData = await client.hGet('connected_users', userKey);
+    if (connectedData) {
+        return JSON.parse(connectedData);
+    }
+    
+    // Then check all users
+    const userData = await client.hGet('all_users', userKey);
+    return userData ? JSON.parse(userData) 
 }
-exports.getUserData = getUserData;
-function getAllConnectedUsers(botId) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const users = yield client.hGetAll('connected_users');
-        const result = Object.values(users).map(userData => JSON.parse(userData));
-        // If botId is provided, filter users by that bot
-        if (botId) {
-            return result.filter(user => user.botId === botId);
-        }
-        return result;
-    });
+
+export async function getAllConnectedUsers(botId?
+    const users = await client.hGetAll('connected_users');
+    const result = Object.values(users).map(userData => JSON.parse(userData));
+    
+    // If botId is provided, filter users by that bot
+    if (botId) {
+        return result.filter(user => user.botId === botId);
+    }
+    
+    return result;
 }
-exports.getAllConnectedUsers = getAllConnectedUsers;
+
 /**
  * Get all users who have ever interacted with the bot
  */
-function getAllTrackedUsers(botId) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const allUsers = yield client.hGetAll('all_users');
-        const users = Object.values(allUsers).map(data => JSON.parse(data));
-        // If botId is provided, filter users by that bot
-        if (botId) {
-            return users.filter(user => user.botId === botId);
-        }
-        return users;
-    });
-}
-exports.getAllTrackedUsers = getAllTrackedUsers;
-function saveTransactionSubmission(chatId, transactionId) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const submission = {
-            id: transactionId,
-            userId: chatId,
-            timestamp: Date.now(),
-            status: 'pending'
-        };
-        yield client.hSet('transaction_submissions', transactionId, JSON.stringify(submission));
-        if (DEBUG) {
-            console.log(`[STORAGE] Saved transaction submission: ${transactionId} from user ${chatId}`);
-        }
-    });
-}
-exports.saveTransactionSubmission = saveTransactionSubmission;
-function updateTransactionStatus(transactionId, status, adminId, notes) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const data = yield client.hGet('transaction_submissions', transactionId);
-        if (!data)
-            return null;
-        const submission = JSON.parse(data);
-        submission.status = status;
-        submission.approvedBy = adminId;
-        if (notes)
-            submission.notes = notes;
-        yield client.hSet('transaction_submissions', transactionId, JSON.stringify(submission));
-        if (DEBUG) {
-            console.log(`[STORAGE] Updated transaction ${transactionId} status to ${status} by admin ${adminId}`);
-        }
-        return submission;
-    });
-}
-exports.updateTransactionStatus = updateTransactionStatus;
-function getTransactionSubmission(transactionId) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const data = yield client.hGet('transaction_submissions', transactionId);
-        return data ? JSON.parse(data) : null;
-    });
-}
-exports.getTransactionSubmission = getTransactionSubmission;
-function getAllPendingTransactions() {
-    return __awaiter(this, void 0, void 0, function* () {
-        const transactions = yield client.hGetAll('transaction_submissions');
-        return Object.values(transactions)
-            .map(data => JSON.parse(data))
-            .filter((submission) => submission.status === 'pending');
-    });
-}
-exports.getAllPendingTransactions = getAllPendingTransactions;
-function saveSupportMessage(message) {
-    return __awaiter(this, void 0, void 0, function* () {
-        yield client.hSet('support_messages', message.id, JSON.stringify(message));
-        // Also add to a user-specific list for quick lookup
-        yield client.sAdd(`support_messages:${message.userId}`, message.id);
-        if (DEBUG) {
-            console.log(`[STORAGE] Saved support message: ${message.id} from ${message.isResponse ? 'admin' : 'user'} ${message.userId}`);
-        }
-    });
-}
-exports.saveSupportMessage = saveSupportMessage;
-function getSupportMessagesForUser(userId) {
-    return __awaiter(this, void 0, void 0, function* () {
-        // Get all message IDs for this user
-        const messageIds = yield client.sMembers(`support_messages:${userId}`);
-        if (!messageIds.length)
-            return [];
-        // Get all messages
-        const messages = [];
-        for (const id of messageIds) {
-            const data = yield client.hGet('support_messages', id);
-            if (data) {
-                messages.push(JSON.parse(data));
-            }
-        }
-        // Sort by timestamp
-        return messages.sort((a, b) => a.timestamp - b.timestamp);
-    });
-}
-exports.getSupportMessagesForUser = getSupportMessagesForUser;
-class TonConnectStorage {
-    constructor(chatId, botId = 'primary') {
-        this.chatId = chatId;
-        this.botId = botId;
+export async function getAllTrackedUsers(botId?
+    const allUsers = await client.hGetAll('all_users');
+    const users = Object.values(allUsers).map(data => JSON.parse(data));
+    
+    // If botId is provided, filter users by that bot
+    if (botId) {
+        return users.filter(user => user.botId === botId);
     }
-    getKey(key) {
+    
+    return users;
+}
+
+// Transaction submission storage
+// export interface TransactionSubmission {
+    id          // Transaction ID or hash
+    userId     // User's chat ID
+    timestamp  // When the transaction was submitted
+    status: 'pending' | 'approved' | 'rejected'; // Status of the transaction
+    approvedBy? // Admin who approved/rejected the transaction
+    notes?     // Optional notes from admin
+}
+
+export async function saveTransactionSubmission(chatId transactionId
+    const submission {
+        id
+        userId
+        timestamp: Date.now(),
+        status: 'pending'
+    };
+    
+    await client.hSet('transaction_submissions', transactionId, JSON.stringify(submission));
+    if (DEBUG) {
+        console.log(`[STORAGE] Saved transaction submission: ${transactionId} from user ${chatId}`);
+    }
+}
+
+export async function updateTransactionStatus(
+    transactionId 
+    status: 'approved' | 'rejected', 
+    adminId 
+    notes? | null>
+    const data = await client.hGet('transaction_submissions', transactionId);
+    if (!data) return null;
+    
+    const submission JSON.parse(data);
+    submission.status = status;
+    submission.approvedBy = adminId;
+    if (notes) submission.notes = notes;
+    
+    await client.hSet('transaction_submissions', transactionId, JSON.stringify(submission));
+    if (DEBUG) {
+        console.log(`[STORAGE] Updated transaction ${transactionId} status to ${status} by admin ${adminId}`);
+    }
+    
+    return submission;
+}
+
+export async function getTransactionSubmission(transactionId | null>
+    const data = await client.hGet('transaction_submissions', transactionId);
+    return data ? JSON.parse(data) 
+}
+
+export async function getAllPendingTransactions()
+    const transactions = await client.hGetAll('transaction_submissions');
+    return Object.values(transactions)
+        .map(data => JSON.parse(data))
+        .filter((submission => submission.status === 'pending');
+}
+
+// Support message system
+// export interface SupportMessage {
+    id           // Message ID (timestamp + random string)
+    userId      // User's chat ID
+    adminId?    // Admin's chat ID (if response)
+    message     // The message content
+    timestamp   // When the message was sent
+    isResponse // Whether this is a response from admin
+}
+
+export async function saveSupportMessage(message
+    await client.hSet('support_messages', message.id, JSON.stringify(message));
+    // Also add to a user-specific list for quick lookup
+    await client.sAdd(`support_messages:${message.userId}`, message.id);
+    
+    if (DEBUG) {
+        console.log(`[STORAGE] Saved support message: ${message.id} from ${message.isResponse ? 'admin' : 'user'} ${message.userId}`);
+    }
+}
+
+export async function getSupportMessagesForUser(userId
+    // Get all message IDs for this user
+    const messageIds = await client.sMembers(`support_messages:${userId}`);
+    if (!messageIds.length) return [];
+    
+    // Get all messages
+    const messages [];
+    for (const id of messageIds) {
+        const data = await client.hGet('support_messages', id);
+        if (data) {
+            messages.push(JSON.parse(data));
+        }
+    }
+    
+    // Sort by timestamp
+    return messages.sort((a, b) => a.timestamp - b.timestamp);
+}
+
+export class TonConnectStorage implements IStorage {
+    constructor(
+        private readonly chatId
+        private readonly botId 'primary'
+    ) {}
+
+    private getKey(key
         return `${this.chatId}:${this.botId}:${key}`;
     }
-    removeItem(key) {
-        return __awaiter(this, void 0, void 0, function* () {
-            const storeKey = this.getKey(key);
-            yield client.del(storeKey);
-            if (DEBUG) {
-                console.log(`[STORAGE] removeItem: ${storeKey}`);
-            }
-        });
+
+    async removeItem(key
+        const storeKey = this.getKey(key);
+        await client.del(storeKey);
+        if (DEBUG) {
+            console.log(`[STORAGE] removeItem: ${storeKey}`);
+        }
     }
-    setItem(key, value) {
-        return __awaiter(this, void 0, void 0, function* () {
-            const storeKey = this.getKey(key);
-            yield client.set(storeKey, value);
-            if (DEBUG) {
-                console.log(`[STORAGE] setItem: ${storeKey} = ${value}`);
-            }
-        });
+
+    async setItem(key value
+        const storeKey = this.getKey(key);
+        await client.set(storeKey, value);
+        if (DEBUG) {
+            console.log(`[STORAGE] setItem: ${storeKey} = ${value}`);
+        }
     }
-    getItem(key) {
-        return __awaiter(this, void 0, void 0, function* () {
-            const storeKey = this.getKey(key);
-            const value = yield client.get(storeKey);
-            if (DEBUG) {
-                console.log(`[STORAGE] getItem: ${storeKey} = ${value}`);
-            }
-            return value || null;
-        });
+
+    async getItem(key | null>
+        const storeKey = this.getKey(key);
+        const value = await client.get(storeKey);
+        if (DEBUG) {
+            console.log(`[STORAGE] getItem: ${storeKey} = ${value}`);
+        }
+        return value || null;
     }
 }
-exports.TonConnectStorage = TonConnectStorage;
-//# sourceMappingURL=storage.js.map
