@@ -10,29 +10,28 @@
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "target": "es6",
-    "strict": false,                /* Temporarily disable strict mode for build */
-    "noImplicitAny": false,         /* Allow implicit any for now */
-    "strictNullChecks": false,      /* Disable strict null checks temporarily */
-    "strictFunctionTypes": false,    /* Disable strict function types */
-    "strictPropertyInitialization": false, /* Disable strict property initialization */
-    "noImplicitThis": false,        /* Allow implicit this */
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "strictFunctionTypes": true,
+    "strictPropertyInitialization": true,
+    "noImplicitThis": true,
     "alwaysStrict": true,
     "noUnusedLocals": false,
-    "noUnusedParameters": false,    /* Don't require unused parameters to be checked */
-    "noImplicitReturns": false,     /* Don't require all code paths to have return */
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
     "module": "commonjs",
     "moduleResolution": "node",
     "sourceMap": true,
     "useUnknownInCatchVariables": false,
-    "noUncheckedIndexedAccess": false, /* Allow unchecked indexed access */
+    "noUncheckedIndexedAccess": true,
     "emitDecoratorMetadata": false,
     "importHelpers": false,
     "skipLibCheck": true,
     "skipDefaultLibCheck": true,
     "allowJs": true,
-    "outDir": "./dist",
-    "types": ["node", "jest"]       /* Explicitly include Node and Jest types */
+    "outDir": "./dist"
   },
   "include": ["src"],
   "exclude": [

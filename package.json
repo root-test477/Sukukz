@@ -19,7 +19,6 @@
     "node": "18.x"
   },
   "devDependencies": {
-    "@types/jest": "^29.5.14",
     "@types/node-telegram-bot-api": "^0.61.4",
     "@types/qrcode": "^1.5.0",
     "@typescript-eslint/eslint-plugin": "^5.38.1",
