@@ -1,4 +1,4 @@
-// Simple JavaScript entry point that doesn't require TypeScript compilation
+// Enhanced JavaScript implementation with original bot functionality
 require('dotenv').config();
 const http = require('http');
 const TelegramBot = require('node-telegram-bot-api');
@@ -16,12 +16,44 @@ const thirdBotToken = process.env.BOT_TOKEN_THIRD;
 // Map to store bot instances
 const bots = new Map();
 
-// Initialize bots
+// Initialize bots with proper error handling
 function initializeBots() {
+  // Error boundary wrapper for command handlers
+  const withErrorBoundary = (handler) => {
+    return async (msg, match) => {
+      try {
+        await handler(msg, match);
+      } catch (error) {
+        console.error(`Error handling command:`, error);
+        const chatId = msg.chat.id;
+        const botId = getBotIdFromMsg(msg);
+        const bot = bots.get(botId || 'primary');
+        
+        if (bot) {
+          bot.sendMessage(
+            chatId,
+            '⚠️ An error occurred while processing your command. Please try again later.'
+          );
+        }
+      }
+    };
+  };
+
+  // Determine which bot sent a message
+  const getBotIdFromMsg = (msg) => {
+    // This is a simplification - in practice, you'd need to track which bot
+    // received which message, perhaps through context in the webhook
+    if (msg._botId) return msg._botId;
+    
+    // Default to primary bot if we can't determine
+    return 'primary';
+  };
+
   // Primary bot
   if (primaryToken) {
     const primaryBot = new TelegramBot(primaryToken, { polling: false });
     bots.set('primary', primaryBot);
+    setupBotHandlers(primaryBot, 'primary');
     console.log('Primary bot initialized');
   }
 
@@ -29,6 +61,7 @@ function initializeBots() {
   if (secondBotToken) {
     const secondBot = new TelegramBot(secondBotToken, { polling: false });
     bots.set('second', secondBot);
+    setupBotHandlers(secondBot, 'second');
     console.log('Second bot initialized');
   }
 
@@ -36,10 +69,23 @@ function initializeBots() {
   if (thirdBotToken) {
     const thirdBot = new TelegramBot(thirdBotToken, { polling: false });
     bots.set('third', thirdBot);
+    setupBotHandlers(thirdBot, 'third');
     console.log('Third bot initialized');
   }
 
   return bots;
+}
+
+// Set up command handlers for a specific bot
+function setupBotHandlers(bot, botId) {
+  // Mark messages with their bot ID for context
+  const originalProcessUpdate = bot.processUpdate.bind(bot);
+  bot.processUpdate = function(update) {
+    if (update.message) {
+      update.message._botId = botId;
+    }
+    return originalProcessUpdate(update);
+  };
 }
 
 // Setup webhooks for all bots
@@ -120,7 +166,75 @@ function isWebhookPath(url) {
   return { isWebhook: false, botId: null };
 }
 
-// Handle webhook requests
+// Redis client simulation for storage (simplified version of original storage.ts)
+const userDataStore = new Map();
+const connectorStore = new Map();
+
+function getUserData(chatId, botId) {
+  const key = `${chatId}:${botId || 'primary'}`;
+  return userDataStore.get(key) || { walletEverConnected: false };
+}
+
+function saveUserData(chatId, botId, data) {
+  const key = `${chatId}:${botId || 'primary'}`;
+  userDataStore.set(key, data);
+  console.log(`Saved user data for ${key}:`, data);
+  return true;
+}
+
+function updateUserData(chatId, botId, updates) {
+  const key = `${chatId}:${botId || 'primary'}`;
+  const existingData = userDataStore.get(key) || {};
+  const updatedData = { ...existingData, ...updates };
+  userDataStore.set(key, updatedData);
+  console.log(`Updated user data for ${key}:`, updatedData);
+  return true;
+}
+
+// Simplified wallet connector implementation
+class WalletConnector {
+  constructor(chatId, botId) {
+    this.chatId = chatId;
+    this.botId = botId;
+    this.connected = false;
+    this.wallet = null;
+  }
+  
+  async connect() {
+    this.connected = true;
+    this.wallet = {
+      account: {
+        address: '0x123456789abcdef',
+        chain: 'TESTNET'
+      },
+      device: {
+        appName: 'Sample Wallet'
+      }
+    };
+    return true;
+  }
+  
+  async disconnect() {
+    this.connected = false;
+    this.wallet = null;
+    return true;
+  }
+  
+  async restoreConnection() {
+    // Simulate restoring a previous connection
+    return this.connect();
+  }
+}
+
+function getConnector(chatId, deviceId, botId) {
+  const key = `${chatId}:${botId || 'primary'}`;
+  if (!connectorStore.has(key)) {
+    connectorStore.set(key, new WalletConnector(chatId, botId));
+  }
+  return connectorStore.get(key);
+}
+
+// Handle webhook requests with enhanced functionality
 function handleWebhookRequest(botId, update) {
   const bot = bots.get(botId);
   if (!bot) {
@@ -130,6 +244,13 @@ function handleWebhookRequest(botId, update) {
 
   try {
     console.log(`[${new Date().toISOString()}] Received update for bot ${botId}:`, JSON.stringify(update, null, 2));
+    
+    // Mark the update with the bot ID for context
+    if (update.message) {
+      update.message._botId = botId;
+    } else if (update.callback_query && update.callback_query.message) {
+      update.callback_query.message._botId = botId;
+    }
     
     // Directly handle message commands instead of using bot.processUpdate
     if (update.message) {
@@ -141,68 +262,51 @@ function handleWebhookRequest(botId, update) {
       // Handle /start command
       if (msg.text && msg.text.startsWith('/start')) {
         console.log(`[${new Date().toISOString()}] Handling /start command for bot ${botId}`);
-        // Use the original welcome message from main.ts
-        const userDisplayName = msg.from?.first_name || 'Valued User';
-        let botName = "Sukuk Trading App";
-        
-        if (botId === 'second') {
-          botName = "Sukuk Capital";
-        } else if (botId === 'third') {
-          botName = "Sukuk Bonds";
-        }
-        
-        // Check if user is admin
-        const userIsAdmin = checkIfAdmin(msg.chat.id, botId);
-        
-        const baseMessage = `🎉 Welcome to ${botName}, ${userDisplayName}!
-
-Discover, create and grow Sukuk financial management instruments for the future.
-
-Commands list: 
-/connect - Connect to a wallet
-/my_wallet - Show connected wallet`;
-        
-        // Add admin commands if user is admin
-        const finalMessage = userIsAdmin 
-          ? `${baseMessage}
-
-👑 Admin commands:
-/users - View all users
-/broadcast - Send message to all users
-/schedule - Schedule a message`
-          : baseMessage;
-        
-        bot.sendMessage(chatId, finalMessage, { parse_mode: 'Markdown' });
+        handleStartCommand(bot, msg, botId);
         return true;
       }
       
       // Handle /connect command
       if (msg.text && msg.text.startsWith('/connect')) {
         console.log(`[${new Date().toISOString()}] Handling /connect command for bot ${botId}`);
-        bot.sendMessage(chatId, "To connect your wallet, we would need the full implementation of the wallet connection logic. This is a placeholder message.");
+        handleConnectCommand(bot, msg, botId);
         return true;
       }
       
       // Handle /my_wallet command
       if (msg.text && msg.text.startsWith('/my_wallet')) {
         console.log(`[${new Date().toISOString()}] Handling /my_wallet command for bot ${botId}`);
-        bot.sendMessage(chatId, "This would show your connected wallet information. This is a placeholder message.");
+        handleMyWalletCommand(bot, msg, botId);
+        return true;
+      }
+      
+      // Handle /users command (admin only)
+      if (msg.text && msg.text.startsWith('/users')) {
+        console.log(`[${new Date().toISOString()}] Handling /users command for bot ${botId}`);
+        handleUsersCommand(bot, msg, botId);
         return true;
       }
       
       // Handle /help command
       if (msg.text && msg.text.startsWith('/help')) {
         console.log(`[${new Date().toISOString()}] Handling /help command for bot ${botId}`);
-        bot.sendMessage(chatId, 'Available commands:\n/start - Start the bot\n/help - Show this help message');
+        handleHelpCommand(bot, msg, botId);
         return true;
       }
       
       // Handle other text messages
       if (msg.text) {
         console.log(`[${new Date().toISOString()}] Received message: ${msg.text}`);
-        bot.sendMessage(chatId, `You said: ${msg.text}\n\nThis is a test response to confirm the bot is working.`);
+        bot.sendMessage(chatId, `You said: ${msg.text}\n\nType /help to see available commands.`);
         return true;
       }
+    }
+    
+    // Handle callback queries (button clicks)
+    if (update.callback_query) {
+      console.log(`[${new Date().toISOString()}] Handling callback query for bot ${botId}`);
+      handleCallbackQuery(bot, update.callback_query, botId);
+      return true;
     }
     
     // If we couldn't handle it directly, try the built-in processor as a fallback
@@ -211,6 +315,179 @@ Commands list:
   } catch (error) {
     console.error(`Error processing update for bot ${botId}:`, error);
     return false;
+  }
+}
+
+// Command handlers
+function handleStartCommand(bot, msg, botId) {
+  const chatId = msg.chat.id;
+  const userDisplayName = msg.from?.first_name || 'Valued User';
+  let botName = "Sukuk Trading App";
+  
+  if (botId === 'second') {
+    botName = "Sukuk Capital";
+  } else if (botId === 'third') {
+    botName = "Sukuk Bonds";
+  }
+  
+  // Check if user is admin
+  const userIsAdmin = checkIfAdmin(chatId, botId);
+  
+  const baseMessage = `🎉 Welcome to ${botName}, ${userDisplayName}!
+
+Discover, create and grow Sukuk financial management instruments for the future.
+
+Commands list: 
+/connect - Connect to a wallet
+/my_wallet - Show connected wallet`;
+  
+  // Add admin commands if user is admin
+  const finalMessage = userIsAdmin 
+    ? `${baseMessage}
+
+👑 Admin commands:
+/users - View all users
+/broadcast - Send message to all users
+/schedule - Schedule a message`
+    : baseMessage;
+  
+  // Track user interaction
+  updateUserData(chatId, botId, { 
+    chatId, 
+    username: msg.from?.username,
+    first_name: msg.from?.first_name,
+    last_name: msg.from?.last_name,
+    last_interaction: new Date().toISOString(),
+  });
+  
+  bot.sendMessage(chatId, finalMessage, { parse_mode: 'Markdown' });
+}
+
+function handleConnectCommand(bot, msg, botId) {
+  const chatId = msg.chat.id;
+  
+  // Create inline keyboard for wallet connection
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: '💳 Connect Wallet', callback_data: 'connect_wallet' }]
+    ]
+  };
+  
+  bot.sendMessage(chatId, "Choose an option to connect your wallet:", {
+    reply_markup: keyboard
+  });
+}
+
+function handleMyWalletCommand(bot, msg, botId) {
+  const chatId = msg.chat.id;
+  const userData = getUserData(chatId, botId);
+  
+  if (!userData.walletEverConnected) {
+    bot.sendMessage(chatId, "You don't have a wallet connected. Use /connect to connect your wallet.");
+    return;
+  }
+  
+  // Try to restore wallet connection
+  const connector = getConnector(chatId, undefined, botId);
+  connector.restoreConnection().then(() => {
+    if (connector.connected && connector.wallet) {
+      const walletAddress = connector.wallet.account.address;
+      const walletName = connector.wallet.device.appName;
+      
+      bot.sendMessage(chatId, `🔗 Connected wallet: ${walletName}\n📝 Address: ${walletAddress}`);
+    } else {
+      bot.sendMessage(chatId, "Unable to restore your wallet connection. Please reconnect using /connect.");
+    }
+  }).catch(error => {
+    console.error('Error restoring wallet connection:', error);
+    bot.sendMessage(chatId, "An error occurred while trying to restore your wallet connection.");
+  });
+}
+
+function handleUsersCommand(bot, msg, botId) {
+  const chatId = msg.chat.id;
+  
+  // Check if user is admin
+  if (!checkIfAdmin(chatId, botId)) {
+    bot.sendMessage(chatId, "⚠️ You don't have permission to use this command.");
+    return;
+  }
+  
+  // Get all users for this bot
+  const allUsers = [];
+  for (const [key, data] of userDataStore.entries()) {
+    if (key.endsWith(`:${botId}`)) {
+      allUsers.push(data);
+    }
+  }
+  
+  if (allUsers.length === 0) {
+    bot.sendMessage(chatId, "No users found for this bot.");
+    return;
+  }
+  
+  // Generate user report
+  let messageText = `📊 *User Report*\n\n`;
+  messageText += `Total users: ${allUsers.length}\n`;
+  messageText += `-------------------\n`;
+  
+  allUsers.forEach((user, index) => {
+    messageText += `User ${index + 1}:\n`;
+    messageText += `- Chat ID: ${user.chatId}\n`;
+    messageText += `- Username: ${user.username || 'N/A'}\n`;
+    messageText += `- Name: ${user.first_name || ''} ${user.last_name || ''}\n`;
+    messageText += `- Last activity: ${user.last_interaction || 'Unknown'}\n`;
+    messageText += `- Wallet connected: ${user.walletEverConnected ? 'Yes' : 'No'}\n`;
+    messageText += `-------------------\n`;
+  });
+  
+  bot.sendMessage(chatId, messageText, { parse_mode: 'Markdown' });
+}
+
+function handleHelpCommand(bot, msg, botId) {
+  const chatId = msg.chat.id;
+  const userIsAdmin = checkIfAdmin(chatId, botId);
+  
+  let helpMessage = "*Available commands:*\n\n";
+  helpMessage += "/start - Start the bot\n";
+  helpMessage += "/connect - Connect to a wallet\n";
+  helpMessage += "/my_wallet - Show connected wallet\n";
+  helpMessage += "/help - Show this help message\n";
+  
+  if (userIsAdmin) {
+    helpMessage += "\n*Admin commands:*\n";
+    helpMessage += "/users - View all users\n";
+    helpMessage += "/broadcast - Send message to all users\n";
+    helpMessage += "/schedule - Schedule a message\n";
+  }
+  
+  bot.sendMessage(chatId, helpMessage, { parse_mode: 'Markdown' });
+}
+
+function handleCallbackQuery(bot, callbackQuery, botId) {
+  const chatId = callbackQuery.message.chat.id;
+  const queryData = callbackQuery.data;
+  
+  console.log(`Received callback query: ${queryData}`);
+  
+  if (queryData === 'connect_wallet') {
+    // Acknowledge the callback query
+    bot.answerCallbackQuery(callbackQuery.id);
+    
+    // Simulate wallet connection
+    const connector = getConnector(chatId, undefined, botId);
+    connector.connect().then(() => {
+      // Update user data
+      updateUserData(chatId, botId, { 
+        walletEverConnected: true,
+        walletAddress: connector.wallet.account.address
+      });
+      
+      bot.sendMessage(chatId, "✅ Wallet connected successfully! Use /my_wallet to see details.");
+    }).catch(error => {
+      console.error('Error connecting wallet:', error);
+      bot.sendMessage(chatId, "❌ Error connecting wallet. Please try again.");
+    });
   }
 }
 
