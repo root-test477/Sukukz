@@ -1,25 +1,23 @@
-import { encodeTelegramUrlParameters, isTelegramUrl, WalletInfoRemote } from "@tonconnect/sdk";
-import { InlineKeyboardButton } from "node-telegram-bot-api";
-
-export const AT_WALLET_APP_NAME = 'telegram-wallet';
-
-export const pTimeoutException = Symbol();
-
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.buildUniversalKeyboard = exports.convertDeeplinkToUniversalLink = exports.addTGReturnStrategy = exports.pTimeout = exports.isAdmin = exports.pTimeoutException = exports.AT_WALLET_APP_NAME = void 0;
+const sdk_1 = require("@tonconnect/sdk");
+exports.AT_WALLET_APP_NAME = 'telegram-wallet';
+exports.pTimeoutException = Symbol();
 /**
  * Check if a user is an admin based on their chat ID
  * @param chatId - Telegram chat ID to check
  * @param botId - Optional bot ID to check for bot-specific admins
  * @returns true if the user is an admin, false otherwise
  */
-export function isAdmin(chatId botId?
+function isAdmin(chatId, botId) {
+    var _a;
     // Global admin IDs that have access to all bots
-    const globalAdminIds = process.env.ADMIN_IDS?.split(',').map(id => Number(id.trim())) || [];
-    
+    const globalAdminIds = ((_a = process.env.ADMIN_IDS) === null || _a === void 0 ? void 0 : _a.split(',').map(id => Number(id.trim()))) || [];
     // Check if user is a global admin
     if (globalAdminIds.includes(chatId)) {
         return true;
     }
-    
     // If botId is provided, check for bot-specific admin IDs
     if (botId) {
         const botSpecificAdminIdsEnv = process.env[`ADMIN_IDS_${botId.toUpperCase()}`];
@@ -28,56 +26,43 @@ export function isAdmin(chatId botId?
             return botSpecificAdminIds.includes(chatId);
         }
     }
-    
     return false;
 }
-
-export function pTimeout<T>(
-    promise
-    time
-    exception pTimeoutException
-)
-    let timer: ReturnType<typeof setTimeout>;
+exports.isAdmin = isAdmin;
+function pTimeout(promise, time, exception = exports.pTimeoutException) {
+    let timer;
     return Promise.race([
         promise,
         new Promise((_r, rej) => (timer = setTimeout(rej, time, exception)))
-    ]).finally(() => clearTimeout(timer)) as Promise<T>;
+    ]).finally(() => clearTimeout(timer));
 }
-
-export function addTGReturnStrategy(link strategy
+exports.pTimeout = pTimeout;
+function addTGReturnStrategy(link, strategy) {
     const parsed = new URL(link);
     parsed.searchParams.append('ret', strategy);
     link = parsed.toString();
-
     const lastParam = link.slice(link.lastIndexOf('&') + 1);
-    return link.slice(0, link.lastIndexOf('&')) + '-' + encodeTelegramUrlParameters(lastParam);
+    return link.slice(0, link.lastIndexOf('&')) + '-' + (0, sdk_1.encodeTelegramUrlParameters)(lastParam);
 }
-
-export function convertDeeplinkToUniversalLink(link walletUniversalLink
+exports.addTGReturnStrategy = addTGReturnStrategy;
+function convertDeeplinkToUniversalLink(link, walletUniversalLink) {
     const search = new URL(link).search;
     const url = new URL(walletUniversalLink);
-
-    if (isTelegramUrl(walletUniversalLink)) {
-        const startattach = 'tonconnect-' + encodeTelegramUrlParameters(search.slice(1));
+    if ((0, sdk_1.isTelegramUrl)(walletUniversalLink)) {
+        const startattach = 'tonconnect-' + (0, sdk_1.encodeTelegramUrlParameters)(search.slice(1));
         url.searchParams.append('startattach', startattach);
-    } else {
+    }
+    else {
         url.search = search;
     }
-
     return url.toString();
 }
-
-export async function buildUniversalKeyboard(
-    link
-    wallets
-    const atWallet = wallets.find(wallet => wallet.appName.toLowerCase() === AT_WALLET_APP_NAME);
+exports.convertDeeplinkToUniversalLink = convertDeeplinkToUniversalLink;
+async function buildUniversalKeyboard(link, wallets) {
+    const atWallet = wallets.find(wallet => wallet.appName.toLowerCase() === exports.AT_WALLET_APP_NAME);
     const atWalletLink = atWallet
-        ? addTGReturnStrategy(
-              convertDeeplinkToUniversalLink(link, atWallet?.universalLink),
-              process.env.TELEGRAM_BOT_LINK!
-          )
-        
-
+        ? addTGReturnStrategy(convertDeeplinkToUniversalLink(link, atWallet === null || atWallet === void 0 ? void 0 : atWallet.universalLink), process.env.TELEGRAM_BOT_LINK)
+        : undefined;
     const keyboard = [
         {
             text: 'Choose a Wallet',
@@ -88,13 +73,13 @@ export async function buildUniversalKeyboard(
             url: `https://ton-connect.github.io/open-tc?connect=${encodeURIComponent(link)}`
         }
     ];
-
     if (atWalletLink) {
         keyboard.unshift({
             text: '@wallet',
             url: atWalletLink
         });
     }
-
     return keyboard;
 }
+exports.buildUniversalKeyboard = buildUniversalKeyboard;
+//# sourceMappingURL=utils.js.map
