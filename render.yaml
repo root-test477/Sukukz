@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: sukuk-telegram-bot
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node start.js
+    envVars:
+      - key: NODE_VERSION
+        value: 20.10.0
+    healthCheckPath: /
