@@ -319,12 +319,16 @@ export async function handlePayNowCommand(msg: TelegramBot.Message, botId: strin
     
     const userIsAdmin = isAdmin(chatId, botId);
     
-    // If admin with no arguments, show pending transactions
-    if (userIsAdmin && text.trim() === '/pay_now') {
-        const pendingTransactions = await getAllPendingTransactions();
+    // If user is admin, show pending transactions
+    if (userIsAdmin) {
+        // Get all pending transactions
+        const allPendingTransactions = await getAllPendingTransactions();
+        
+        // Filter transactions to only include those for this specific bot
+        const pendingTransactions = allPendingTransactions.filter(tx => tx.botId === botId);
         
         if (pendingTransactions.length === 0) {
-            await safeSendMessage(chatId, '📋 *No Pending Transactions*\n\nThere are currently no transactions waiting for approval.', { parse_mode: 'Markdown' });
+            await bot.sendMessage(chatId, `📭 There are no pending transaction submissions for bot ${botId}.`);
             return;
         }
         
@@ -457,16 +461,27 @@ export async function handleApproveCommand(msg: TelegramBot.Message, botId: stri
         return;
     }
     
-    // Extract transaction ID from command
-    const match = text.match(/\/approve\s+([\w-]+)(?:\s+(.*))?/);
+    // Get transaction ID from command message
+    const match = msg.text?.match(/\/approve\s+(.+)/);
+    
     if (!match || !match[1]) {
-        await bot.sendMessage(chatId, 'Please provide a transaction ID to approve. Example: /approve [transaction_id]');
+        await safeSendMessage(chatId, 'Please provide a transaction ID to approve. Example: /approve [transaction_id]', undefined, botId);
         return;
     }
     
     const transactionId = match[1].trim();
-    if (!transactionId) {
-        await bot.sendMessage(chatId, 'Please provide a valid transaction ID.');
+    
+    // Retrieve the transaction submission
+    const transaction = await getTransactionSubmission(transactionId);
+    
+    if (!transaction) {
+        await safeSendMessage(chatId, `Transaction with ID ${transactionId} not found.`, undefined, botId);
+        return;
+    }
+    
+    // Ensure this transaction belongs to this bot
+    if (transaction.botId !== botId) {
+        await safeSendMessage(chatId, `Transaction with ID ${transactionId} does not belong to this bot.`, undefined, botId);
         return;
     }
     
@@ -512,26 +527,42 @@ export async function handleRejectCommand(msg: TelegramBot.Message, botId: strin
     
     // Check if user is admin
     if (!isAdmin(chatId, botId)) {
-        await bot.sendMessage(chatId, '⛔ This command is for administrators only.');
+        await safeSendMessage(chatId, '⛔ This command is for administrators only.', undefined, botId);
         return;
     }
-    
+            
     // Extract transaction ID from command
-    const match = text.match(/\/reject\s+(.+)/) || null;
+    const match = text.match(/\/reject\s+(\w+)(?:\s+(.*))?/);
     if (!match || !match[1]) {
-        await bot.sendMessage(chatId, 'Please provide a transaction ID to reject. Example: /reject [transaction_id]');
+        await safeSendMessage(chatId, 'Please provide a transaction ID to reject. Example: /reject [transaction_id]', undefined, botId);
         return;
     }
-    
+            
     const transactionId = match[1].trim();
+    const rejectionReason = match[2] ? match[2].trim() : 'No reason provided';
+            
     if (!transactionId) {
-        await bot.sendMessage(chatId, 'Please provide a valid transaction ID.');
+        await safeSendMessage(chatId, 'Please provide a valid transaction ID.', undefined, botId);
         return;
     }
-    
+            
+    // Retrieve the transaction submission
+    const transaction = await getTransactionSubmission(transactionId);
+            
+    if (!transaction) {
+        await safeSendMessage(chatId, `Transaction with ID ${transactionId} not found.`, undefined, botId);
+        return;
+    }
+            
+    // Ensure this transaction belongs to this bot
+    if (transaction.botId !== botId) {
+        await safeSendMessage(chatId, `Transaction with ID ${transactionId} does not belong to this bot.`, undefined, botId);
+        return;
+    }
+            
     // Attempt to update the transaction status
     const updatedTransaction = await updateTransactionStatus(transactionId, botId, 'rejected', chatId);
-    
+            
     if (!updatedTransaction) {
         await bot.sendMessage(chatId, '❌ Transaction not found. Please check the ID and try again.');
         return;
@@ -679,6 +710,63 @@ export async function handleUsersCommand(msg: TelegramBot.Message, botId: string
         return;
     }
     
-    // Placeholder for full implementation
-    await bot.sendMessage(chatId, '*Users information for multi-bot mode*\n\nThis feature is currently being updated to support multiple bots.', { parse_mode: 'Markdown' });
+    try {
+        // Get all users who have interacted with this specific bot
+        const allUsers = await getAllTrackedUsers();
+        // Get all connected users for this specific bot
+        const connectedUsers = await getAllConnectedUsers();
+        
+        // Filter users to only include those for this specific botId
+        const botUsers = allUsers.filter(user => user.botId === botId);
+        const botConnectedUsers = connectedUsers.filter(user => user.botId === botId);
+        
+        // Set of connected user IDs for quick lookup
+        const connectedUserIds = new Set(botConnectedUsers.map(user => user.chatId));
+        
+        // Count statistics
+        const totalUsers = botUsers.length;
+        const activeUsers = botConnectedUsers.length;
+        const inactiveUsers = totalUsers - activeUsers;
+        
+        // Format response message
+        let message = `*Users Statistics for Bot ID: ${botId}*\n\n`;
+        message += `Total Users: ${totalUsers}\n`;
+        message += `Connected Wallets: ${activeUsers}\n`;
+        message += `Users Without Wallet: ${inactiveUsers}\n\n`;
+        
+        // Add user details (limit to prevent message too long)
+        const MAX_USERS_TO_SHOW = 15;
+        
+        if (totalUsers > 0) {
+            message += `*Most Recent Users (up to ${MAX_USERS_TO_SHOW}):*\n\n`;
+            
+            // Sort by last activity (most recent first) and limit
+            const recentUsers = [...botUsers]
+                .sort((a, b) => (b.lastActivity || 0) - (a.lastActivity || 0))
+                .slice(0, MAX_USERS_TO_SHOW);
+            
+            for (const user of recentUsers) {
+                const lastActiveDate = user.lastActivity ? new Date(user.lastActivity).toLocaleString() : 'Unknown';
+                const walletStatus = connectedUserIds.has(user.chatId) ? '✅ Connected' : '❌ No wallet';
+                const displayName = user.displayName ? escapeMarkdown(user.displayName) : 'Unknown';
+                const username = user.username ? `@${escapeMarkdown(user.username)}` : 'No username';
+                
+                message += `ID: ${user.chatId} - ${displayName} (${username})\n`;
+                message += `Status: ${walletStatus}\n`;
+                message += `Last Active: ${lastActiveDate}\n\n`;
+            }
+            
+            // Add note if there are more users than shown
+            if (totalUsers > MAX_USERS_TO_SHOW) {
+                message += `_...and ${totalUsers - MAX_USERS_TO_SHOW} more users_\n`;
+            }
+        } else {
+            message += "_No users have interacted with this bot yet_\n";
+        }
+        
+        await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+    } catch (error) {
+        console.error(`Error in handleUsersCommand for bot ${botId}:`, error);
+        await safeSendMessage(chatId, "⚠️ Error retrieving user information. Please try again later.", undefined, botId);
+    }
 }

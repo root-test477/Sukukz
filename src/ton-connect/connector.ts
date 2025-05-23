@@ -59,21 +59,29 @@ export function getConnector(
         const botFactory = BotFactory.getInstance();
         const botConfig = botFactory.getBotConfig(botId);
         
-        // Use a local manifest URL instead of external one to avoid CORS issues
-        // Format: http://localhost:PORT/tonconnect-manifest-botId.json or /tonconnect-manifest.json for default
-        const PORT = process.env.PORT || 10000;
-        const hostname = process.env.HOST || 'localhost';
-        const protocol = process.env.NODE_ENV === 'production' ? 'https' : 'http';
+        // Use the manifest URL from environment variables if available,
+        // otherwise use the internal manifest URL from the server
+        let manifestUrl;
         
-        // Create a local manifest URL for this specific bot
-        let manifestUrl = `${protocol}://${hostname}:${PORT}/tonconnect-manifest-${botId}.json`;
-        
-        // Fall back to config or env if specified
         if (botConfig?.manifestUrl) {
+            // Use the bot-specific manifest URL from config
             manifestUrl = botConfig.manifestUrl;
         } else if (process.env.MANIFEST_URL) {
+            // Use the global manifest URL from environment
             manifestUrl = process.env.MANIFEST_URL;
+        } else {
+            // Generate a local manifest URL
+            // For production, use the domain without port
+            const isProduction = process.env.NODE_ENV === 'production';
+            const hostname = process.env.HOST || (isProduction ? 'dlb-sukuk.22web.org' : 'localhost');
+            const protocol = isProduction ? 'https' : 'http';
+            const port = isProduction ? '' : `:${process.env.PORT || 10000}`;
+            
+            // Create a local manifest URL for this specific bot
+            manifestUrl = `${protocol}://${hostname}${port}/tonconnect-manifest-${botId}.json`;
         }
+        
+        // The manifest URL is now properly set above
         
         // Log the manifest URL for debugging
         if (DEBUG) {
