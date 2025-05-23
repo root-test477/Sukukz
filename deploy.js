@@ -28,12 +28,13 @@ function copyDir(src, dest) {
       const content = fs.readFileSync(srcPath, 'utf8');
       const jsFile = destPath.replace(/\.ts$/, '.js');
       
-      // Simple transformation to make TypeScript code work as JavaScript
+      // Convert imports to requires
       let jsContent = content
-        // Keep imports but comment out type imports
-        .replace(/import\s+type\s+.*?from\s+['"].*?['"]/g, '// $&')
-        .replace(/import\s+\{\s*([^{}]*?)\s*\}\s+from\s+['"]([^'"]*)['"]/g, (match, imports, module) => {
-          // Filter out type imports
+        // Convert import statements to require statements
+        .replace(/import\s+([a-zA-Z0-9_]+)\s+from\s+['"](.*?)['"];?/g, 'const $1 = require("$2");')
+        .replace(/import\s+\*\s+as\s+([a-zA-Z0-9_]+)\s+from\s+['"](.*?)['"];?/g, 'const $1 = require("$2");')
+        .replace(/import\s+\{\s*([^{}]*?)\s*\}\s+from\s+['"](.*?)['"];?/g, (match, imports, module) => {
+          // Handle named imports
           const cleanImports = imports
             .split(',')
             .map(i => i.trim())
@@ -43,7 +44,24 @@ function copyDir(src, dest) {
           if (cleanImports.length === 0) {
             return `// ${match}`;
           }
-          return `import { ${cleanImports} } from "${module}"`;
+          
+          const importNames = cleanImports.split(',').map(name => name.trim());
+          let requireStatement = `const { ${importNames.join(', ')} } = require("${module}");`;
+          return requireStatement;
+        })
+        // Comment out type imports
+        .replace(/import\s+type\s+.*?from\s+['"](.*?)['"];?/g, '// $&')
+        // Convert default export
+        .replace(/export\s+default\s+([a-zA-Z0-9_]+);?/g, 'module.exports = $1;')
+        // Convert named exports
+        .replace(/export\s+const\s+([a-zA-Z0-9_]+)/g, 'const $1')
+        .replace(/export\s+function\s+([a-zA-Z0-9_]+)/g, 'function $1')
+        .replace(/export\s+class\s+([a-zA-Z0-9_]+)/g, 'class $1')
+        // Add exports at the end
+        .replace(/export\s+\{\s*([^{}]*?)\s*\};?/g, (match, exports) => {
+          const exportNames = exports.split(',').map(name => name.trim());
+          const exportStatements = exportNames.map(name => `module.exports.${name} = ${name};`).join('\n');
+          return exportStatements;
         })
         // Remove type annotations
         .replace(/:\s*[A-Za-z0-9_<>\[\]\|\{\}]+(\s*\|\s*[A-Za-z0-9_<>\[\]\|\{\}]+)*(\s*=|\s*\)|\s*,|\s*;|\s*\{|\s*$)/g, '$1')
