@@ -197,13 +197,50 @@ async function main(): Promise<void> {
     for (const [botId, bot] of bots.entries()) {
         console.log(`Initializing bot with ID: ${botId}`);
         await initializeBot(bot, botId);
+        
+        // In production, set up webhooks instead of polling
+        if (process.env.NODE_ENV === 'production') {
+            await setupWebhook(botId, bot);
+        }
     }
     
     console.log('All bots initialized successfully!');
+    
+    if (process.env.NODE_ENV === 'production') {
+        console.log('Webhooks set up for all bots in production mode');
+    } else {
+        console.log('Using polling mode in development environment');    
+    }
 }
 
-// Create a simple HTTP server to keep the bot alive on Render
-const server = http.createServer((req, res) => {
+// Set up webhook endpoint to receive updates from Telegram in production environments
+async function setupWebhook(botId: string, bot: TelegramBot): Promise<void> {
+    if (process.env.NODE_ENV !== 'production') {
+        // In development, we use polling, so no need to set up webhooks
+        return;
+    }
+
+    try {
+        // Get the webhook URL from environment variables
+        const baseUrl = process.env.WEBHOOK_BASE_URL || 'https://root-test477.onrender.com';
+        const webhookPath = `/webhook/${botId}`;
+        const webhookUrl = `${baseUrl}${webhookPath}`;
+        
+        console.log(`Setting webhook for bot ${botId} to ${webhookUrl}`);
+        
+        // Set the webhook for the bot
+        await bot.setWebHook(webhookUrl);
+        
+        // Verify webhook was set correctly
+        const webhookInfo = await bot.getWebHookInfo();
+        console.log(`Webhook for bot ${botId} set to: ${webhookInfo.url}`);
+    } catch (error) {
+        console.error(`Error setting up webhook for bot ${botId}:`, error);
+    }
+}
+
+// Create a simple HTTP server to handle both webhooks and keep the bot alive on Render
+const server = http.createServer(async (req, res) => {
     // Log all incoming requests in debug mode
     if (process.env.DEBUG_MODE === 'true') {
         console.log(`Received request: ${req.method} ${req.url}`);
@@ -274,6 +311,56 @@ const server = http.createServer((req, res) => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }));
         return;
+    }
+    
+    // Handle webhook requests from Telegram
+    if (req.url?.startsWith('/webhook/')) {
+        try {
+            // Extract botId from URL (format: /webhook/{botId})
+            const botId = req.url.replace('/webhook/', '');
+            
+            // Get the bot instance
+            const botFactory = BotFactory.getInstance();
+            const bot = botFactory.getBot(botId);
+            
+            if (!bot) {
+                console.error(`Webhook request for unknown bot ID: ${botId}`);
+                res.writeHead(404);
+                res.end('Bot not found');
+                return;
+            }
+            
+            // Read the request body
+            let body = '';
+            req.on('data', (chunk) => {
+                body += chunk.toString();
+            });
+            
+            req.on('end', () => {
+                try {
+                    // Parse the update from Telegram
+                    const update = JSON.parse(body);
+                    
+                    // Process the update (this triggers the bot's event handlers)
+                    bot.processUpdate(update);
+                    
+                    // Respond with 200 OK
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ status: 'ok' }));
+                } catch (error) {
+                    console.error(`Error processing webhook update for bot ${botId}:`, error);
+                    res.writeHead(500);
+                    res.end('Error processing update');
+                }
+            });
+            
+            return;
+        } catch (error) {
+            console.error('Error handling webhook request:', error);
+            res.writeHead(500);
+            res.end('Error processing webhook');
+            return;
+        }
     }
     
     // Default response

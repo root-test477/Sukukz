@@ -113,12 +113,28 @@ export class BotFactory {
         
         console.log(`Creating new bot instance with ID ${config.id}`);
         
-        // Create a new bot instance
-        const bot = new TelegramBot(config.token, { polling: true });
+        // In production environments with multiple processes (like Render),
+        // we need to use webhooks instead of polling to avoid 409 conflicts
+        let bot: TelegramBot;
         
-        // Store the bot instance and its configuration
-        this.bots.set(config.id, bot);
-        this.configs.set(config.id, config);
+        // Check if we're in a production environment
+        if (process.env.NODE_ENV === 'production') {
+            // In production, create the bot without polling
+            bot = new TelegramBot(config.token, { polling: false });
+            
+            // Store the bot instance and its configuration
+            this.bots.set(config.id, bot);
+            this.configs.set(config.id, config);
+            
+            // We'll configure the webhook in main.ts
+        } else {
+            // In development, use polling as before
+            bot = new TelegramBot(config.token, { polling: true });
+            
+            // Store the bot instance and its configuration
+            this.bots.set(config.id, bot);
+            this.configs.set(config.id, config);
+        }
         
         return bot;
     }
