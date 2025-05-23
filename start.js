@@ -99,7 +99,38 @@ function handleWebhookRequest(botId, update) {
   }
 
   try {
-    // Process the update
+    console.log(`[${new Date().toISOString()}] Received update for bot ${botId}:`, JSON.stringify(update, null, 2));
+    
+    // Directly handle message commands instead of using bot.processUpdate
+    if (update.message) {
+      const msg = update.message;
+      const chatId = msg.chat.id;
+      
+      console.log(`[${new Date().toISOString()}] Processing message for bot ${botId} from chat ${chatId}`);
+      
+      // Handle /start command
+      if (msg.text && msg.text.startsWith('/start')) {
+        console.log(`[${new Date().toISOString()}] Handling /start command for bot ${botId}`);
+        bot.sendMessage(chatId, `Welcome to ${botId === 'primary' ? 'Primary Bot' : botId === 'second' ? 'Second Bot' : 'Third Bot'}! This bot is working correctly.`);
+        return true;
+      }
+      
+      // Handle /help command
+      if (msg.text && msg.text.startsWith('/help')) {
+        console.log(`[${new Date().toISOString()}] Handling /help command for bot ${botId}`);
+        bot.sendMessage(chatId, 'Available commands:\n/start - Start the bot\n/help - Show this help message');
+        return true;
+      }
+      
+      // Handle other text messages
+      if (msg.text) {
+        console.log(`[${new Date().toISOString()}] Received message: ${msg.text}`);
+        bot.sendMessage(chatId, `You said: ${msg.text}\n\nThis is a test response to confirm the bot is working.`);
+        return true;
+      }
+    }
+    
+    // If we couldn't handle it directly, try the built-in processor as a fallback
     bot.processUpdate(update);
     return true;
   } catch (error) {
@@ -110,10 +141,14 @@ function handleWebhookRequest(botId, update) {
 
 // Create HTTP server for webhook endpoints
 const server = http.createServer((req, res) => {
+  console.log(`[${new Date().toISOString()}] Received HTTP request: ${req.method} ${req.url}`);
+  
   // Check if this is a webhook request
   const { isWebhook, botId } = isWebhookPath(req.url);
   
   if (isWebhook && botId && req.method === 'POST') {
+    console.log(`[${new Date().toISOString()}] Processing webhook request for bot ${botId}`);
+    
     // Handle webhook request
     let body = '';
     req.on('data', (chunk) => {
@@ -121,9 +156,33 @@ const server = http.createServer((req, res) => {
     });
     
     req.on('end', () => {
+      console.log(`[${new Date().toISOString()}] Webhook request body: ${body}`);
+      
       try {
         const update = JSON.parse(body);
+        
+        // Log incoming message details
+        if (update.message) {
+          console.log(`[${new Date().toISOString()}] Received message from ${update.message.from?.username || 'Unknown'}: ${update.message.text || '[non-text content]'}`);
+        }
+        
+        // Register basic command handlers for the bot if not already done
+        const bot = bots.get(botId);
+        if (bot && !bot._commandsRegistered) {
+          console.log(`[${new Date().toISOString()}] Setting up command handlers for bot ${botId}`);
+          
+          // Basic /start command handler
+          bot.onText(/\/start/, (msg) => {
+            const chatId = msg.chat.id;
+            console.log(`[${new Date().toISOString()}] Sending welcome message to ${chatId}`);
+            bot.sendMessage(chatId, `Welcome to ${botId === 'primary' ? 'Primary Bot' : botId === 'second' ? 'Second Bot' : 'Third Bot'}! This bot is working.`);
+          });
+          
+          bot._commandsRegistered = true;
+        }
+        
         const success = handleWebhookRequest(botId, update);
+        console.log(`[${new Date().toISOString()}] Webhook processing ${success ? 'succeeded' : 'failed'}`);
         
         res.writeHead(success ? 200 : 404, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success }));
