@@ -9,7 +9,7 @@
     "experimentalDecorators": false,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
-    "target": "es6",
+    "target": "es2017",
     "strict": false,
     "noImplicitAny": false,
     "strictNullChecks": false,
@@ -34,6 +34,12 @@
     "allowJs": true,
     "checkJs": false,
     "outDir": "./dist"
+  },
+  "ts-node": {
+    "transpileOnly": true,
+    "compilerOptions": {
+      "module": "commonjs"
+    }
   },
   "include": ["src"],
   "exclude": [

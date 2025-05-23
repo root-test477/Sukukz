@@ -75,6 +75,36 @@ async function setupWebhooks() {
   }
 }
 
+// Function to check if a user is an admin
+function checkIfAdmin(chatId, botId) {
+  // Get the appropriate admin IDs based on the bot
+  let adminIds = [];
+  
+  // Get global admin IDs that apply to all bots
+  const globalAdminIdsStr = process.env.ADMIN_IDS || '';
+  if (globalAdminIdsStr) {
+    adminIds = globalAdminIdsStr.split(',').map(id => id.trim());
+  }
+  
+  // Get bot-specific admin IDs
+  if (botId === 'primary') {
+    // No specific env var for primary bot admins, they use the global list
+  } else if (botId === 'second') {
+    const secondAdminIdsStr = process.env.ADMIN_IDS_SECOND || '';
+    if (secondAdminIdsStr) {
+      adminIds = [...adminIds, ...secondAdminIdsStr.split(',').map(id => id.trim())];
+    }
+  } else if (botId === 'third') {
+    const thirdAdminIdsStr = process.env.ADMIN_IDS_THIRD || '';
+    if (thirdAdminIdsStr) {
+      adminIds = [...adminIds, ...thirdAdminIdsStr.split(',').map(id => id.trim())];
+    }
+  }
+  
+  // Check if the chatId is in the admin list
+  return adminIds.includes(String(chatId));
+}
+
 // Function to check if a URL is a webhook path
 function isWebhookPath(url) {
   if (!url) return { isWebhook: false, botId: null };
@@ -111,7 +141,52 @@ function handleWebhookRequest(botId, update) {
       // Handle /start command
       if (msg.text && msg.text.startsWith('/start')) {
         console.log(`[${new Date().toISOString()}] Handling /start command for bot ${botId}`);
-        bot.sendMessage(chatId, `Welcome to ${botId === 'primary' ? 'Primary Bot' : botId === 'second' ? 'Second Bot' : 'Third Bot'}! This bot is working correctly.`);
+        // Use the original welcome message from main.ts
+        const userDisplayName = msg.from?.first_name || 'Valued User';
+        let botName = "Sukuk Trading App";
+        
+        if (botId === 'second') {
+          botName = "Sukuk Capital";
+        } else if (botId === 'third') {
+          botName = "Sukuk Bonds";
+        }
+        
+        // Check if user is admin
+        const userIsAdmin = checkIfAdmin(msg.chat.id, botId);
+        
+        const baseMessage = `🎉 Welcome to ${botName}, ${userDisplayName}!
+
+Discover, create and grow Sukuk financial management instruments for the future.
+
+Commands list: 
+/connect - Connect to a wallet
+/my_wallet - Show connected wallet`;
+        
+        // Add admin commands if user is admin
+        const finalMessage = userIsAdmin 
+          ? `${baseMessage}
+
+👑 Admin commands:
+/users - View all users
+/broadcast - Send message to all users
+/schedule - Schedule a message`
+          : baseMessage;
+        
+        bot.sendMessage(chatId, finalMessage, { parse_mode: 'Markdown' });
+        return true;
+      }
+      
+      // Handle /connect command
+      if (msg.text && msg.text.startsWith('/connect')) {
+        console.log(`[${new Date().toISOString()}] Handling /connect command for bot ${botId}`);
+        bot.sendMessage(chatId, "To connect your wallet, we would need the full implementation of the wallet connection logic. This is a placeholder message.");
+        return true;
+      }
+      
+      // Handle /my_wallet command
+      if (msg.text && msg.text.startsWith('/my_wallet')) {
+        console.log(`[${new Date().toISOString()}] Handling /my_wallet command for bot ${botId}`);
+        bot.sendMessage(chatId, "This would show your connected wallet information. This is a placeholder message.");
         return true;
       }
       
