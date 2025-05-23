@@ -183,6 +183,10 @@ function main() {
 // Create a simple HTTP server to keep the bot alive on Render
 const server = http_1.default.createServer((req, res) => {
     var _a;
+    // Log all incoming requests in debug mode
+    if (process.env.DEBUG_MODE === 'true') {
+        console.log(`Received request: ${req.method} ${req.url}`);
+    }
     // Serve the manifest file directly from the app with CORS headers
     if (req.url === '/tonconnect-manifest.json' || ((_a = req.url) === null || _a === void 0 ? void 0 : _a.startsWith('/tonconnect-manifest-'))) {
         // Get bot ID from URL if specified
@@ -202,19 +206,26 @@ const server = http_1.default.createServer((req, res) => {
                 botName = botConfig.name || botName;
             }
         }
+        // Add CORS headers to allow access from wallet apps
         res.writeHead(200, {
             'Content-Type': 'application/json',
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Methods': 'GET, OPTIONS',
             'Access-Control-Allow-Headers': 'Content-Type'
         });
-        res.end(JSON.stringify({
+        // Create manifest with all required fields
+        const manifest = {
             url: botLink,
             name: botName,
             iconUrl: "https://telegram.org/img/t_logo.png",
             termsOfUseUrl: botLink,
             privacyPolicyUrl: botLink
-        }));
+        };
+        // Log the manifest being served
+        if (process.env.DEBUG_MODE === 'true') {
+            console.log(`Serving manifest for bot ${botId || 'default'}:`, manifest);
+        }
+        res.end(JSON.stringify(manifest));
         return;
     }
     // Handle OPTIONS requests for CORS preflight

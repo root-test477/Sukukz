@@ -84,7 +84,20 @@ function getConnector(chatId, botId, onConnectorExpired) {
         // Get bot-specific manifest URL from bot factory
         const botFactory = bot_factory_1.BotFactory.getInstance();
         const botConfig = botFactory.getBotConfig(botId);
-        const manifestUrl = (botConfig === null || botConfig === void 0 ? void 0 : botConfig.manifestUrl) || process.env.MANIFEST_URL;
+        // Use a local manifest URL instead of external one to avoid CORS issues
+        // Format: http://localhost:PORT/tonconnect-manifest-botId.json or /tonconnect-manifest.json for default
+        const PORT = process.env.PORT || 10000;
+        const hostname = process.env.HOST || 'localhost';
+        const protocol = process.env.NODE_ENV === 'production' ? 'https' : 'http';
+        // Create a local manifest URL for this specific bot
+        let manifestUrl = `${protocol}://${hostname}:${PORT}/tonconnect-manifest-${botId}.json`;
+        // Fall back to config or env if specified
+        if (botConfig === null || botConfig === void 0 ? void 0 : botConfig.manifestUrl) {
+            manifestUrl = botConfig.manifestUrl;
+        }
+        else if (process.env.MANIFEST_URL) {
+            manifestUrl = process.env.MANIFEST_URL;
+        }
         // Log the manifest URL for debugging
         if (DEBUG) {
             console.log(`[CONNECTOR] Using manifest URL: ${manifestUrl} for botId: ${botId}`);

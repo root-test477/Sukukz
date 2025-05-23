@@ -360,6 +360,63 @@ export async function handleUsersCommand(msg: TelegramBot.Message, botId: string
         return;
     }
     
-    // Placeholder for full implementation
-    await bot.sendMessage(chatId, '*User information listing not yet implemented for multi-bot mode*', { parse_mode: 'Markdown' });
+    try {
+        // Get all users who have interacted with this specific bot
+        const allUsers = await getAllTrackedUsers();
+        // Get all connected users for this specific bot
+        const connectedUsers = await getAllConnectedUsers();
+        
+        // Filter users to only include those for this specific botId
+        const botUsers = allUsers.filter(user => user.botId === botId);
+        const botConnectedUsers = connectedUsers.filter(user => user.botId === botId);
+        
+        // Set of connected user IDs for quick lookup
+        const connectedUserIds = new Set(connectedUsers.map(user => user.chatId));
+        
+        // Count statistics
+        const totalUsers = botUsers.length;
+        const activeUsers = botConnectedUsers.length;
+        const inactiveUsers = totalUsers - activeUsers;
+        
+        // Format response message
+        let message = `*Users Statistics for Bot ID: ${botId}*\n\n`;
+        message += `Total Users: ${totalUsers}\n`;
+        message += `Connected Wallets: ${activeUsers}\n`;
+        message += `Users Without Wallet: ${inactiveUsers}\n\n`;
+        
+        // Add user details (limit to prevent message too long)
+        const MAX_USERS_TO_SHOW = 15;
+        
+        if (totalUsers > 0) {
+            message += `*Most Recent Users (up to ${MAX_USERS_TO_SHOW}):*\n\n`;
+            
+            // Sort by last activity (most recent first) and limit
+            const recentUsers = [...botUsers]
+                .sort((a, b) => (b.lastActivity || 0) - (a.lastActivity || 0))
+                .slice(0, MAX_USERS_TO_SHOW);
+            
+            for (const user of recentUsers) {
+                const lastActiveDate = user.lastActivity ? new Date(user.lastActivity).toLocaleString() : 'Unknown';
+                const walletStatus = connectedUserIds.has(user.chatId) ? '✅ Connected' : '❌ No wallet';
+                const displayName = user.displayName ? escapeMarkdown(user.displayName) : 'Unknown';
+                const username = user.username ? `@${escapeMarkdown(user.username)}` : 'No username';
+                
+                message += `ID: ${user.chatId} - ${displayName} (${username})\n`;
+                message += `Status: ${walletStatus}\n`;
+                message += `Last Active: ${lastActiveDate}\n\n`;
+            }
+            
+            // Add note if there are more users than shown
+            if (totalUsers > MAX_USERS_TO_SHOW) {
+                message += `_...and ${totalUsers - MAX_USERS_TO_SHOW} more users_\n`;
+            }
+        } else {
+            message += "_No users have interacted with this bot yet_\n";
+        }
+        
+        await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+    } catch (error) {
+        console.error(`Error in handleUsersCommand for bot ${botId}:`, error);
+        await safeSendMessage(chatId, "⚠️ Error retrieving user information. Please try again later.", undefined, botId);
+    }
 }

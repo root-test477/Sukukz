@@ -95,6 +95,22 @@ export class BotFactory {
             return this.bots.get(config.id)!;
         }
         
+        // Check if any existing bot is already using this token
+        // This prevents the 409 Conflict errors from Telegram
+        for (const [existingId, existingConfig] of this.configs.entries()) {
+            if (existingConfig.token === config.token) {
+                console.warn(`Warning: Bot with ID ${config.id} is using the same token as ${existingId}`);
+                console.warn(`To avoid polling conflicts, we'll reuse the existing bot instance.`);
+                
+                // Store a reference to the existing bot with the new ID
+                const existingBot = this.bots.get(existingId)!;
+                this.bots.set(config.id, existingBot);
+                this.configs.set(config.id, config);
+                
+                return existingBot;
+            }
+        }
+        
         console.log(`Creating new bot instance with ID ${config.id}`);
         
         // Create a new bot instance
