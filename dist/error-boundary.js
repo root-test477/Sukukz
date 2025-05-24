@@ -21,7 +21,6 @@ const utils_1 = require("./utils");
  */
 function withErrorBoundary(handler) {
     return (...args) => __awaiter(this, void 0, void 0, function* () {
-        var _a, _b;
         try {
             yield handler(...args);
         }
@@ -50,38 +49,86 @@ function withErrorBoundary(handler) {
             if (chatId) {
                 try {
                     // Try to extract botId from the arguments
-                    let botId = 'default';
+                    let botId = 'main'; // Default to 'main' instead of 'default'
                     if (args.length > 1 && typeof args[1] === 'string') {
                         botId = args[1];
                     }
-                    // Get the bot instance
-                    const botInstance = bot_manager_1.botManager.getBot(botId);
+                    // Make sure botId is a valid string
+                    const safeBotId = typeof botId === 'string' ? botId : 'main';
+                    // Get the bot instance - try the specified botId first, then fall back to the first available bot
+                    let botInstance = bot_manager_1.botManager.getBot(safeBotId);
+                    if (!botInstance) {
+                        // If no bot found with the specified ID, get the first available bot
+                        const allBots = bot_manager_1.botManager.getAllBots();
+                        if (allBots.size > 0) {
+                            const firstBotId = Array.from(allBots.keys())[0];
+                            botInstance = allBots.get(firstBotId);
+                            // Type assertion to handle potential undefined values
+                            const logBotId = botId || 'unknown';
+                            console.log(`Bot ID ${logBotId} not found, falling back to ${firstBotId} for message sending`);
+                        }
+                    }
                     if (botInstance) {
                         // Send a user-friendly error message
-                        yield botInstance.sendMessage(chatId, "⚠️ There was a problem processing your request. Please try again later.");
+                        if (botInstance.sendMessage) {
+                            yield botInstance.sendMessage(chatId, "⚠️ There was a problem processing your request. Please try again later.");
+                        }
+                        else {
+                            console.error('Bot instance does not have sendMessage method');
+                        }
+                    }
+                    else {
+                        console.error('No available bot instances to send error message');
                     }
                     // Notify admin(s) about the error
-                    const adminIds = ((_a = process.env.ADMIN_IDS) === null || _a === void 0 ? void 0 : _a.split(',').map(id => Number(id.trim()))) || [];
+                    const adminIdsStr = process.env.ADMIN_IDS || '';
+                    const adminIds = adminIdsStr.split(',').filter(id => id.trim()).map(id => Number(id.trim()));
                     if (adminIds.length > 0) {
+                        const commandText = typeof args[0] === 'object' && args[0] && 'text' in args[0] ? String(args[0].text) : 'Unknown';
                         const errorDetails = `
 🔴 *Bot Error Report*
 
 *Error Type*: ${error instanceof Error ? error.name : 'Unknown'}
 *Message*: ${error instanceof Error ? error.message : String(error)}
 *User ID*: ${chatId}
-*Command*: ${((_b = args[0]) === null || _b === void 0 ? void 0 : _b.text) || 'Unknown'}
+*Command*: ${commandText}
 *Time*: ${new Date().toISOString()}`;
                         for (const adminId of adminIds) {
                             try {
                                 // Try to extract botId from the arguments
-                                let botId = 'default';
+                                let botId = 'main'; // Default to 'main' instead of 'default'
                                 if (args.length > 1 && typeof args[1] === 'string') {
                                     botId = args[1];
                                 }
-                                if (adminId !== chatId || (0, utils_1.isAdmin)(chatId, botId)) {
-                                    const botInstance = bot_manager_1.botManager.getBot(botId);
+                                // Make sure botId is a string before passing to isAdmin
+                                const validBotId = typeof botId === 'string' ? botId : 'main';
+                                if (adminId !== chatId || (0, utils_1.isAdmin)(chatId, validBotId)) {
+                                    // Get the bot instance - try the specified botId first, then fall back to the first available bot
+                                    let botInstance = bot_manager_1.botManager.getBot(validBotId);
+                                    if (!botInstance) {
+                                        // If no bot found with the specified ID, get the first available bot
+                                        const allBots = bot_manager_1.botManager.getAllBots();
+                                        if (allBots.size > 0) {
+                                            const firstBotId = Array.from(allBots.keys())[0];
+                                            botInstance = allBots.get(firstBotId);
+                                            // Type assertion to handle potential undefined values
+                                            const logBotId = validBotId || 'unknown';
+                                            console.log(`Bot ID ${logBotId} not found for admin notification, falling back to ${firstBotId}`);
+                                        }
+                                    }
                                     if (botInstance) {
-                                        yield botInstance.sendMessage(adminId, errorDetails, { parse_mode: 'Markdown' });
+                                        // Escape any Markdown that might cause formatting issues
+                                        const safeErrorDetails = errorDetails
+                                            .replace(/\*/g, '\\*')
+                                            .replace(/_/g, '\\_')
+                                            .replace(/\[/g, '\\[')
+                                            .replace(/\]/g, '\\]')
+                                            .replace(/\(/g, '\\(')
+                                            .replace(/\)/g, '\\)')
+                                            .replace(/~/g, '\\~')
+                                            .replace(/`/g, '\\`')
+                                            .replace(/>/g, '\\>');
+                                        yield botInstance.sendMessage(adminId, safeErrorDetails, { parse_mode: 'Markdown' });
                                     }
                                 }
                             }
@@ -103,13 +150,32 @@ exports.withErrorBoundary = withErrorBoundary;
  * Safe message sender that handles Markdown parsing errors
  * If sending with Markdown fails, it will retry without Markdown
  */
-function safeSendMessage(chatId, text, options, botId) {
+function safeSendMessage(chatId, text, options, botId = '') {
     return __awaiter(this, void 0, void 0, function* () {
         try {
-            // Get the bot instance from botManager
-            const botInstance = bot_manager_1.botManager.getBot(botId || 'default');
+            // Try to get the bot instance using the provided ID
+            // Make sure we have a valid string for botId
+            const validBotId = typeof botId === 'string' && botId.length > 0 ? botId : 'main';
+            let botInstance = bot_manager_1.botManager.getBot(validBotId);
+            // If no bot found with the specified ID, fallback to the first available bot
             if (!botInstance) {
-                throw new Error(`Bot instance not found for botId: ${botId || 'default'}`);
+                const allBots = bot_manager_1.botManager.getAllBots();
+                if (allBots.size > 0) {
+                    // Get the first bot ID and ensure it's a valid string
+                    const botKeys = Array.from(allBots.keys());
+                    if (botKeys.length > 0) {
+                        const firstBotId = botKeys[0];
+                        // Verify the key is a non-empty string before using it
+                        if (typeof firstBotId === 'string' && firstBotId.length > 0) {
+                            botInstance = allBots.get(firstBotId);
+                            console.log(`Bot ID not found, falling back to ${firstBotId} for message sending`);
+                        }
+                    }
+                }
+            }
+            // If still no bot instance found, throw an error
+            if (!botInstance) {
+                throw new Error(`No bot instances available for sending messages`);
             }
             return yield botInstance.sendMessage(chatId, text, options);
         }
@@ -125,10 +191,28 @@ function safeSendMessage(chatId, text, options, botId) {
                 if (safeOptions.parse_mode) {
                     delete safeOptions.parse_mode;
                 }
-                // Get the bot instance again (to make sure it's defined)
-                const botInstance = bot_manager_1.botManager.getBot(botId || 'default');
+                // Try to get the bot instance again
+                // Make sure we have a valid string for botId
+                const validRetryBotId = typeof botId === 'string' && botId.length > 0 ? botId : 'main';
+                let botInstance = bot_manager_1.botManager.getBot(validRetryBotId);
+                // If no bot found with the specified ID, fallback to the first available bot
                 if (!botInstance) {
-                    throw new Error(`Bot instance not found for botId: ${botId || 'default'}`);
+                    const allBots = bot_manager_1.botManager.getAllBots();
+                    if (allBots.size > 0) {
+                        const botKeys = Array.from(allBots.keys());
+                        if (botKeys.length > 0) {
+                            // Use type assertion to ensure TypeScript knows this is a string
+                            const firstBotId = botKeys[0];
+                            // Verify the key is a non-empty string before using it
+                            if (typeof firstBotId === 'string' && firstBotId.length > 0) {
+                                botInstance = allBots.get(firstBotId);
+                            }
+                        }
+                    }
+                }
+                // If still no bot instance found, throw an error
+                if (!botInstance) {
+                    throw new Error(`No bot instances available for sending messages`);
                 }
                 // Add a note about formatting
                 return yield botInstance.sendMessage(chatId, text + "\n\n(Note: Some formatting was removed due to technical issues)", safeOptions);

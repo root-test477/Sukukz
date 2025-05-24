@@ -505,7 +505,7 @@ function handlePayNowCommand(msg, botId) {
         if (userIsAdmin && text.trim() === '/pay_now') {
             const pendingTransactions = yield (0, storage_1.getAllPendingTransactions)();
             if (pendingTransactions.length === 0) {
-                yield (0, error_boundary_1.safeSendMessage)(chatId, '📋 *No Pending Transactions*\n\nThere are currently no transactions waiting for approval.', { parse_mode: 'Markdown' });
+                yield (0, error_boundary_1.safeSendMessage)(chatId, '📋 *No Pending Transactions*\n\nThere are currently no transactions waiting for approval.', { parse_mode: 'Markdown' }, botId);
                 return;
             }
             // Format a list of pending transactions
@@ -521,7 +521,7 @@ function handlePayNowCommand(msg, botId) {
             message += 'To approve or reject a transaction, use:\n';
             message += '/approve [transaction_id]\n';
             message += '/reject [transaction_id]';
-            yield (0, error_boundary_1.safeSendMessage)(chatId, message, { parse_mode: 'Markdown' });
+            yield (0, error_boundary_1.safeSendMessage)(chatId, message, { parse_mode: 'Markdown' }, botId);
             return;
         }
         // User submitting a new transaction
@@ -535,17 +535,17 @@ function handlePayNowCommand(msg, botId) {
                             { text: '« Back to Menu', callback_data: JSON.stringify({ method: 'back_to_menu', data: '' }) }
                         ]]
                 }
-            });
+            }, botId);
             return;
         }
         // Type assertion for TypeScript
         if (!transactionMatch[1]) {
-            yield (0, error_boundary_1.safeSendMessage)(chatId, 'Please provide a transaction ID. Example: /pay_now 97af4b72e0c98db5c1d8f5233...');
+            yield (0, error_boundary_1.safeSendMessage)(chatId, 'Please provide a transaction ID. Example: /pay_now 97af4b72e0c98db5c1d8f5233...', undefined, botId);
             return;
         }
         const transactionId = transactionMatch[1].trim();
         if (!transactionId) {
-            yield (0, error_boundary_1.safeSendMessage)(chatId, 'Please provide a valid transaction ID.');
+            yield (0, error_boundary_1.safeSendMessage)(chatId, 'Please provide a valid transaction ID.', undefined, botId);
             return;
         }
         // Check if this transaction ID has already been submitted
@@ -563,13 +563,13 @@ function handlePayNowCommand(msg, botId) {
                     statusMessage = 'This transaction ID was previously rejected. Please submit a new transaction or contact support.';
                     break;
             }
-            yield (0, error_boundary_1.safeSendMessage)(chatId, `⚠️ *Transaction Already Exists*\n\n${statusMessage}`, { parse_mode: 'Markdown' });
+            yield (0, error_boundary_1.safeSendMessage)(chatId, `⚠️ *Transaction Already Exists*\n\n${statusMessage}`, { parse_mode: 'Markdown' }, botId);
             return;
         }
         // Save the new transaction submission
         yield (0, storage_1.saveTransactionSubmission)(chatId, transactionId, botId);
         // Notify the user that their submission was received
-        yield (0, error_boundary_1.safeSendMessage)(chatId, '✅ *Transaction Submitted*\n\nYour transaction has been submitted for admin approval. You will be notified once it has been reviewed.', { parse_mode: 'Markdown' });
+        yield (0, error_boundary_1.safeSendMessage)(chatId, '✅ *Transaction Submitted*\n\nYour transaction has been submitted for admin approval. You will be notified once it has been reviewed.', { parse_mode: 'Markdown' }, botId);
         // Notify all admins
         const adminIds = ((_a = process.env.ADMIN_IDS) === null || _a === void 0 ? void 0 : _a.split(',').map(id => Number(id.trim()))) || [];
         for (const adminId of adminIds) {
@@ -578,7 +578,7 @@ function handlePayNowCommand(msg, botId) {
                 const userNameWithId = `${userName} (ID: ${chatId})`;
                 // Escape transaction ID for markdown
                 const safeTransactionId = escapeMarkdown(transactionId);
-                yield (0, error_boundary_1.safeSendMessage)(adminId, `🔔 *New Transaction Submission*\n\nFrom: ${userNameWithId}\n\nTransaction ID: \`${safeTransactionId}\`\n\nTo approve or reject, use:\n/approve ${transactionId}\n/reject ${transactionId}`, { parse_mode: 'Markdown' });
+                yield (0, error_boundary_1.safeSendMessage)(adminId, `🔔 *New Transaction Submission*\n\nFrom: ${userNameWithId}\n\nTransaction ID: \`${safeTransactionId}\`\n\nTo approve or reject, use:\n/approve ${transactionId}\n/reject ${transactionId}`, { parse_mode: 'Markdown' }, botId);
             }
             catch (error) {
                 console.error(`Failed to notify admin ${adminId}:`, error);

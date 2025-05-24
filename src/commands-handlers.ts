@@ -576,7 +576,7 @@ export async function handlePayNowCommand(msg: TelegramBot.Message, botId: strin
         const pendingTransactions = await getAllPendingTransactions();
         
         if (pendingTransactions.length === 0) {
-            await safeSendMessage(chatId, '📋 *No Pending Transactions*\n\nThere are currently no transactions waiting for approval.', { parse_mode: 'Markdown' });
+            await safeSendMessage(chatId, '📋 *No Pending Transactions*\n\nThere are currently no transactions waiting for approval.', { parse_mode: 'Markdown' }, botId);
             return;
         }
         
@@ -595,7 +595,7 @@ export async function handlePayNowCommand(msg: TelegramBot.Message, botId: strin
         message += '/approve [transaction_id]\n'
         message += '/reject [transaction_id]';
         
-        await safeSendMessage(chatId, message, { parse_mode: 'Markdown' });
+        await safeSendMessage(chatId, message, { parse_mode: 'Markdown' }, botId);
         return;
     }
     
@@ -614,20 +614,21 @@ export async function handlePayNowCommand(msg: TelegramBot.Message, botId: strin
                         { text: '« Back to Menu', callback_data: JSON.stringify({ method: 'back_to_menu', data: '' }) }
                     ]]
                 }
-            }
+            },
+            botId
         );
         return;
     }
     
     // Type assertion for TypeScript
     if (!transactionMatch[1]) {
-        await safeSendMessage(chatId, 'Please provide a transaction ID. Example: /pay_now 97af4b72e0c98db5c1d8f5233...');
+        await safeSendMessage(chatId, 'Please provide a transaction ID. Example: /pay_now 97af4b72e0c98db5c1d8f5233...', undefined, botId);
         return;
     }
     
     const transactionId = transactionMatch[1].trim();
     if (!transactionId) {
-        await safeSendMessage(chatId, 'Please provide a valid transaction ID.');
+        await safeSendMessage(chatId, 'Please provide a valid transaction ID.', undefined, botId);
         return;
     }
     
@@ -647,7 +648,7 @@ export async function handlePayNowCommand(msg: TelegramBot.Message, botId: strin
                 break;
         }
         
-        await safeSendMessage(chatId, `⚠️ *Transaction Already Exists*\n\n${statusMessage}`, { parse_mode: 'Markdown' });
+        await safeSendMessage(chatId, `⚠️ *Transaction Already Exists*\n\n${statusMessage}`, { parse_mode: 'Markdown' }, botId);
         return;
     }
     
@@ -658,7 +659,8 @@ export async function handlePayNowCommand(msg: TelegramBot.Message, botId: strin
     await safeSendMessage(
         chatId,
         '✅ *Transaction Submitted*\n\nYour transaction has been submitted for admin approval. You will be notified once it has been reviewed.',
-        { parse_mode: 'Markdown' }
+        { parse_mode: 'Markdown' },
+        botId
     );
     
     // Notify all admins
@@ -674,7 +676,8 @@ export async function handlePayNowCommand(msg: TelegramBot.Message, botId: strin
             await safeSendMessage(
                 adminId,
                 `🔔 *New Transaction Submission*\n\nFrom: ${userNameWithId}\n\nTransaction ID: \`${safeTransactionId}\`\n\nTo approve or reject, use:\n/approve ${transactionId}\n/reject ${transactionId}`,
-                { parse_mode: 'Markdown' }
+                { parse_mode: 'Markdown' },
+                botId
             );
         } catch (error) {
             console.error(`Failed to notify admin ${adminId}:`, error);
