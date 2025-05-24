@@ -3,15 +3,13 @@
   "version": "1.0.0",
   "scripts": {
     "compile": "npx rimraf dist && tsc",
-    "register-webhooks": "node ./register-webhooks.js",
-    "run": "node ./register-webhooks.js && node ./dist/main.js",
+    "run": "node ./dist/main.js",
     "start:redis": "docker run -d -p 127.0.0.1:6379:6379 redis/redis-stack-server:latest",
     "start:daemon": "pm2 start --name tgbot ./dist/main.js",
     "stop:daemon": "pm2 stop tgbot && pm2 delete tgbot"
   },
   "dependencies": {
     "@tonconnect/sdk": "^3.0.0-beta.1",
-    "axios": "^1.6.7",
     "dotenv": "^16.0.3",
     "node-telegram-bot-api": "^0.61.0",
     "qrcode": "^1.5.1",
@@ -21,7 +19,8 @@
     "node": "18.x"
   },
   "devDependencies": {
-    "@types/node-telegram-bot-api": "^0.61.4",
+    "@types/node": "^22.15.21",
+    "@types/node-telegram-bot-api": "^0.61.11",
     "@types/qrcode": "^1.5.0",
     "@typescript-eslint/eslint-plugin": "^5.38.1",
     "@typescript-eslint/parser": "^5.38.1",
