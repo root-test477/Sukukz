@@ -113,28 +113,66 @@ export class BotFactory {
         
         console.log(`Creating new bot instance with ID ${config.id}`);
         
-        // In production environments with multiple processes (like Render),
-        // we need to use webhooks instead of polling to avoid 409 conflicts
+        // Create the bot using the best approach for the current environment
         let bot: TelegramBot;
+        const forcedPolling = process.env.FORCE_POLLING === 'true';
         
-        // Check if we're in a production environment
-        if (process.env.NODE_ENV === 'production') {
-            // In production, create the bot without polling
-            bot = new TelegramBot(config.token, { polling: false });
+        // Determine whether to use polling or webhooks
+        const usePolling = forcedPolling || process.env.NODE_ENV !== 'production';
+        
+        if (usePolling) {
+            // Use polling in development or if forced in production
+            console.log(`Creating bot ${config.id} with polling enabled`);
             
-            // Store the bot instance and its configuration
-            this.bots.set(config.id, bot);
-            this.configs.set(config.id, config);
-            
-            // We'll configure the webhook in main.ts
+            try {
+                bot = new TelegramBot(config.token, { 
+                    // Add error handler for polling
+                    onlyFirstMatch: true,
+                    // Reduce polling conflicts with more reasonable interval
+                    polling: {
+                        interval: 1000, // Poll every second instead of default 300ms
+                        autoStart: true, // Start polling immediately
+                        params: {
+                            timeout: 60   // Match the timeout for long polling
+                        }
+                    }
+                });
+                
+                // Add error handler for polling errors
+                bot.on('polling_error', (error) => {
+                    // Don't log 409 conflicts as they're expected in multi-instance environments
+                    if (error.message && error.message.includes('409 Conflict')) {
+                        console.log(`Bot ${config.id} polling conflict - this is normal in multi-instance environments.`);
+                        
+                        // If we're in production and encounter polling conflicts, try to disable polling
+                        if (process.env.NODE_ENV === 'production' && !forcedPolling) {
+                            console.log(`Attempting to stop polling for bot ${config.id} to avoid conflicts.`);
+                            try {
+                                bot.stopPolling();
+                                console.log(`Polling stopped for bot ${config.id}.`);
+                            } catch (e) {
+                                console.error(`Failed to stop polling for bot ${config.id}:`, e);
+                            }
+                        }
+                    } else {
+                        console.error(`Bot ${config.id} polling error:`, error);
+                    }
+                });
+            } catch (error) {
+                console.error(`Error setting up polling for bot ${config.id}:`, error);
+                // Fallback to non-polling bot on error
+                console.log(`Falling back to non-polling bot for ${config.id}`);
+                bot = new TelegramBot(config.token, { polling: false });
+            }
         } else {
-            // In development, use polling as before
-            bot = new TelegramBot(config.token, { polling: true });
-            
-            // Store the bot instance and its configuration
-            this.bots.set(config.id, bot);
-            this.configs.set(config.id, config);
+            // In production, create the bot without polling (will use webhooks instead)
+            console.log(`Creating bot ${config.id} without polling (webhook mode)`);
+            bot = new TelegramBot(config.token, { polling: false });
         }
+        
+        // Store the bot instance and its configuration regardless of polling setup
+        this.bots.set(config.id, bot);
+        this.configs.set(config.id, config);
         
         return bot;
     }

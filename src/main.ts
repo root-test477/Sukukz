@@ -226,14 +226,29 @@ async function setupWebhook(botId: string, bot: TelegramBot): Promise<void> {
         const webhookPath = `/webhook/${botId}`;
         const webhookUrl = `${baseUrl}${webhookPath}`;
         
+        // Create a secret token for securing the webhook
+        // This helps verify that requests to our webhook are actually from Telegram
+        const secretToken = process.env.WEBHOOK_SECRET_TOKEN || 'your_secure_token_here';
+        
         console.log(`Setting webhook for bot ${botId} to ${webhookUrl}`);
         
-        // Set the webhook for the bot
-        await bot.setWebHook(webhookUrl);
+        // Set the webhook for the bot with additional options
+        // Using any type to bypass TypeScript limitation as the node-telegram-bot-api types
+        // don't include the secret_token parameter yet
+        await bot.setWebHook(webhookUrl, {
+            // Allow all update types
+            allowed_updates: [],
+            // Only serve HTTPS webhook
+            max_connections: 40,
+            // Add this to environment variables for production
+            // @ts-ignore - secret_token is supported by the API but not in the type definitions
+            secret_token: secretToken
+        });
         
         // Verify webhook was set correctly
         const webhookInfo = await bot.getWebHookInfo();
         console.log(`Webhook for bot ${botId} set to: ${webhookInfo.url}`);
+        console.log(`Webhook pending updates: ${webhookInfo.pending_update_count}`);
     } catch (error) {
         console.error(`Error setting up webhook for bot ${botId}:`, error);
     }
@@ -330,6 +345,22 @@ const server = http.createServer(async (req, res) => {
                 return;
             }
             
+            // Verify the request came from Telegram by checking the secret token
+            const secretToken = process.env.WEBHOOK_SECRET_TOKEN || 'your_secure_token_here';
+            const requestToken = req.headers['x-telegram-bot-api-secret-token'];
+            
+            // Log headers for debugging (remove in production)
+            console.log(`Webhook received for bot ${botId} with method ${req.method}`);
+            console.log('Headers:', JSON.stringify(req.headers));
+            
+            // Skip token verification in development or if no token is provided
+            if (process.env.NODE_ENV === 'production' && secretToken && requestToken !== secretToken) {
+                console.error(`Invalid secret token in webhook request for bot ${botId}`);
+                res.writeHead(403);
+                res.end('Unauthorized');
+                return;
+            }
+            
             // Read the request body
             let body = '';
             req.on('data', (chunk) => {
@@ -337,9 +368,19 @@ const server = http.createServer(async (req, res) => {
             });
             
             req.on('end', () => {
+                if (!body) {
+                    console.log(`Empty webhook request received for bot ${botId}`);
+                    res.writeHead(200);
+                    res.end('OK');
+                    return;
+                }
+                
                 try {
                     // Parse the update from Telegram
                     const update = JSON.parse(body);
+                    
+                    // Log the update type for debugging
+                    console.log(`Received update for bot ${botId}: ${JSON.stringify(update).substring(0, 200)}...`);
                     
                     // Process the update (this triggers the bot's event handlers)
                     bot.processUpdate(update);
@@ -349,6 +390,7 @@ const server = http.createServer(async (req, res) => {
                     res.end(JSON.stringify({ status: 'ok' }));
                 } catch (error) {
                     console.error(`Error processing webhook update for bot ${botId}:`, error);
+                    console.error('Update body:', body.substring(0, 500));
                     res.writeHead(500);
                     res.end('Error processing update');
                 }
