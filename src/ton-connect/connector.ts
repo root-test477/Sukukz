@@ -60,19 +60,38 @@ export function getConnector(
         }
         
         try {
-            storedItem = {
-                connector: new TonConnect({
-                    manifestUrl,
-                    storage: new TonConnectStorage(chatId, botId)
-                }),
-                onConnectorExpired: []
-            } as unknown as StoredConnectorData;
+            // Check if the manifest URL is valid
+            if (!manifestUrl || !manifestUrl.startsWith('http')) {
+                console.error(`[CONNECTOR] Invalid manifest URL for bot ${botId}: ${manifestUrl}`);
+                console.log(`[CONNECTOR] Using default manifest URL as fallback`);
+                // Use a default manifest URL if the configured one is invalid
+                const defaultManifestUrl = 'https://ton-connect.github.io/demo-dapp-with-react-ui/tonconnect-manifest.json';
+                
+                storedItem = {
+                    connector: new TonConnect({
+                        manifestUrl: defaultManifestUrl,
+                        storage: new TonConnectStorage(chatId, botId)
+                    }),
+                    onConnectorExpired: []
+                } as unknown as StoredConnectorData;
+            } else {
+                storedItem = {
+                    connector: new TonConnect({
+                        manifestUrl,
+                        storage: new TonConnectStorage(chatId, botId)
+                    }),
+                    onConnectorExpired: []
+                } as unknown as StoredConnectorData;
+            }
         } catch (error) {
             console.error(`[CONNECTOR] Error creating connector for bot ${botId}:`, error);
-            // Create a fallback connector anyway to avoid runtime errors
+            // Create a fallback connector with the default TON Connect manifest
+            const defaultManifestUrl = 'https://ton-connect.github.io/demo-dapp-with-react-ui/tonconnect-manifest.json';
+            console.log(`[CONNECTOR] Using default manifest URL due to error: ${defaultManifestUrl}`);
+            
             storedItem = {
                 connector: new TonConnect({
-                    manifestUrl,
+                    manifestUrl: defaultManifestUrl,
                     storage: new TonConnectStorage(chatId, botId)
                 }),
                 onConnectorExpired: []

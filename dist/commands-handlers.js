@@ -20,8 +20,24 @@ const storage_1 = require("./ton-connect/storage");
 const utils_1 = require("./utils");
 const qrcode_1 = __importDefault(require("qrcode"));
 const connector_1 = require("./ton-connect/connector");
-const utils_2 = require("./utils");
 const error_boundary_1 = require("./error-boundary");
+const redis_1 = require("redis");
+// Redis client for data storage
+const client = (0, redis_1.createClient)({
+    url: process.env.REDIS_URL || 'redis://localhost:6379',
+});
+// Ensure Redis client is connected
+(() => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        if (!client.isOpen) {
+            yield client.connect();
+        }
+    }
+    catch (error) {
+        console.error('Redis connection error:', error);
+    }
+}))();
+// Use the escapeMarkdown function defined below (line ~950)
 // Use composite key (chatId:botId) to store connect request listeners
 let newConnectRequestListenersMap = new Map();
 /**
@@ -80,7 +96,7 @@ function handleConnectCommand(msg, botId) {
         const wallets = yield (0, wallets_1.getWallets)();
         const link = connector.connect(wallets);
         const image = yield qrcode_1.default.toBuffer(link);
-        const keyboard = yield (0, utils_2.buildUniversalKeyboard)(link, wallets, botId);
+        const keyboard = yield (0, utils_1.buildUniversalKeyboard)(link, wallets, botId);
         // Send photo using bot instance directly since we need the message object
         const botInstance = bot_manager_1.botManager.getBot(botId);
         if (!botInstance)
@@ -124,7 +140,7 @@ function handleSendTXCommand(msg, botId) {
         // Get bot-specific transaction settings
         const defaultAmount = process.env.DEFAULT_TRANSACTION_AMOUNT || '100000000'; // 100 TON default
         const recipientAddress = bot_manager_1.botManager.getRecipientAddress(botId) || '0:0000000000000000000000000000000000000000000000000000000000000000';
-        (0, utils_2.pTimeout)(connector.sendTransaction({
+        (0, utils_1.pTimeout)(connector.sendTransaction({
             validUntil: Math.round((Date.now() + Number(process.env.DELETE_SEND_TX_MESSAGE_TIMEOUT_MS || 600000)) / 1000),
             messages: [
                 {
@@ -140,7 +156,7 @@ function handleSendTXCommand(msg, botId) {
             yield botSafeMessage(chatId, botId, `Transaction sent successfully`);
         }))
             .catch((e) => __awaiter(this, void 0, void 0, function* () {
-            if (e === utils_2.pTimeoutException) {
+            if (e === utils_1.pTimeoutException) {
                 yield botSafeMessage(chatId, botId, `Transaction was not confirmed`);
                 return;
             }
@@ -159,7 +175,7 @@ function handleSendTXCommand(msg, botId) {
         if ((0, sdk_1.isTelegramUrl)(deeplink)) {
             const url = new URL(deeplink);
             url.searchParams.append('startattach', 'tonconnect');
-            deeplink = (0, utils_2.addTGReturnStrategy)(url.toString(), process.env.TELEGRAM_BOT_LINK);
+            deeplink = (0, utils_1.addTGReturnStrategy)(url.toString(), process.env.TELEGRAM_BOT_LINK);
         }
         yield botSafeMessage(chatId, botId, `Open ${(walletInfo === null || walletInfo === void 0 ? void 0 : walletInfo.name) || connector.wallet.device.appName} and confirm transaction`, {
             reply_markup: {
@@ -283,7 +299,7 @@ function handleFundingCommand(msg, botId) {
             yield botInstance.sendMessage(chatId, 'Connect wallet to send transaction. If you\'re having connection issues, try /connect again.');
             return;
         }
-        (0, utils_2.pTimeout)(connector.sendTransaction({
+        (0, utils_1.pTimeout)(connector.sendTransaction({
             validUntil: Math.round((Date.now() + Number(process.env.DELETE_SEND_TX_MESSAGE_TIMEOUT_MS)) / 1000),
             messages: [
                 {
@@ -304,7 +320,7 @@ function handleFundingCommand(msg, botId) {
             const errorBotInstance = bot_manager_1.botManager.getBot(botId);
             if (!errorBotInstance)
                 return;
-            if (e === utils_2.pTimeoutException) {
+            if (e === utils_1.pTimeoutException) {
                 errorBotInstance.sendMessage(chatId, `Transaction was not confirmed`);
                 return;
             }
@@ -323,7 +339,7 @@ function handleFundingCommand(msg, botId) {
         if ((0, sdk_1.isTelegramUrl)(deeplink)) {
             const url = new URL(deeplink);
             url.searchParams.append('startattach', 'tonconnect');
-            deeplink = (0, utils_2.addTGReturnStrategy)(url.toString(), process.env.TELEGRAM_BOT_LINK);
+            deeplink = (0, utils_1.addTGReturnStrategy)(url.toString(), process.env.TELEGRAM_BOT_LINK);
         }
         const botInstanceForMessage = bot_manager_1.botManager.getBot(botId);
         if (botInstanceForMessage) {
@@ -508,20 +524,83 @@ function handlePayNowCommand(msg, botId) {
                 yield (0, error_boundary_1.safeSendMessage)(chatId, '📋 *No Pending Transactions*\n\nThere are currently no transactions waiting for approval.', { parse_mode: 'Markdown' }, botId);
                 return;
             }
-            // Format a list of pending transactions
+            // Format a list of pending transactions with enhanced details
             let message = '📋 *Pending Transactions*\n\n';
-            pendingTransactions.forEach((tx, index) => {
+            // Function to truncate transaction IDs for display
+            const truncateId = (id) => {
+                if (id.length > 12) {
+                    return id.substring(0, 6) + '...' + id.substring(id.length - 6);
+                }
+                return id;
+            };
+            // Add a summary header
+            message += `Found *${pendingTransactions.length}* pending transactions waiting for approval.\n\n`;
+            // Store transaction IDs to make them accessible by index
+            const txCache = [];
+            // Process transactions first to get all user info
+            const txPromises = pendingTransactions.map((tx, index) => __awaiter(this, void 0, void 0, function* () {
+                txCache.push(tx.id); // Store ID for quick action commands
                 const date = new Date(tx.timestamp).toLocaleString();
                 // Escape transaction ID to prevent Markdown parsing issues
                 const safeTransactionId = escapeMarkdown(tx.id);
-                message += `${index + 1}. Transaction ID: \`${safeTransactionId}\`\n`;
-                message += `   User ID: ${tx.userId}\n`;
-                message += `   Submitted: ${date}\n\n`;
+                const truncatedId = truncateId(tx.id);
+                // Get user details if available
+                let userInfo = '';
+                try {
+                    const user = yield (0, utils_1.getUserById)(tx.userId);
+                    if (user) {
+                        const userName = user.displayName || 'Unknown';
+                        const userHandle = user.username ? `@${user.username}` : '';
+                        userInfo = `${userName} ${userHandle} (ID: ${tx.userId})`;
+                    }
+                    else {
+                        userInfo = `User ID: ${tx.userId}`;
+                    }
+                }
+                catch (_b) {
+                    userInfo = `User ID: ${tx.userId}`;
+                }
+                // Format transaction details
+                let txMessage = `${index + 1}. *Transaction ${truncatedId}*\n`;
+                txMessage += `   📝 Full ID: \`${safeTransactionId}\`\n`;
+                txMessage += `   👤 From: ${userInfo}\n`;
+                txMessage += `   🕒 Submitted: ${date}\n`;
+                txMessage += `   🤖 Bot: ${tx.botId || 'main'}\n\n`;
+                // Add quick action buttons
+                txMessage += `   *Quick Actions*: /approve_${index + 1} | /reject_${index + 1}\n\n`;
+                return txMessage;
+            }));
+            // Wait for all promises to resolve
+            const txMessages = yield Promise.all(txPromises);
+            // Add all transaction messages to the main message
+            message += txMessages.join('');
+            // Store the transaction ID cache in Redis for quick access
+            yield client.set(`txCache:${botId}`, JSON.stringify(txCache), {
+                EX: 3600 // Cache for 1 hour
             });
+            // Add keyboard with quick action buttons
+            const inlineKeyboard = [];
+            // Create rows of quick action buttons, 2 buttons per row (approve/reject for each transaction)
+            for (let i = 0; i < txCache.length; i++) {
+                const row = [
+                    { text: `✅ Approve #${i + 1}`, callback_data: JSON.stringify({ method: 'approve_tx', index: i }) },
+                    { text: `❌ Reject #${i + 1}`, callback_data: JSON.stringify({ method: 'reject_tx', index: i }) }
+                ];
+                inlineKeyboard.push(row);
+            }
+            // Add back button
+            inlineKeyboard.push([
+                { text: '« Back to Menu', callback_data: JSON.stringify({ method: 'back_to_menu', data: '' }) }
+            ]);
             message += 'To approve or reject a transaction, use:\n';
             message += '/approve [transaction_id]\n';
             message += '/reject [transaction_id]';
-            yield (0, error_boundary_1.safeSendMessage)(chatId, message, { parse_mode: 'Markdown' }, botId);
+            yield (0, error_boundary_1.safeSendMessage)(chatId, message, {
+                parse_mode: 'Markdown',
+                reply_markup: {
+                    inline_keyboard: inlineKeyboard
+                }
+            }, botId);
             return;
         }
         // User submitting a new transaction

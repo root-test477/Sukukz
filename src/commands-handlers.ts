@@ -2,12 +2,30 @@ import { CHAIN, isTelegramUrl, toUserFriendlyAddress, UserRejectsError } from '@
 import { botManager } from './bot-manager';
 import { getWallets, getWalletInfo } from './ton-connect/wallets';
 import { saveConnectedUser, removeConnectedUser, updateUserActivity, getAllConnectedUsers, saveSupportMessage, getSupportMessagesForUser, saveTransactionSubmission, updateTransactionStatus, getTransactionSubmission, getAllPendingTransactions, TransactionSubmission, trackUserInteraction, getAllTrackedUsers } from './ton-connect/storage';
-import { isAdmin } from './utils';
+import { isAdmin, getUserById, addTGReturnStrategy, buildUniversalKeyboard, pTimeout, pTimeoutException } from './utils';
 import QRCode from 'qrcode';
 import TelegramBot from 'node-telegram-bot-api';
 import { getConnector } from './ton-connect/connector';
-import { addTGReturnStrategy, buildUniversalKeyboard, pTimeout, pTimeoutException } from './utils';
 import { safeSendMessage } from './error-boundary';
+import { createClient } from 'redis';
+
+// Redis client for data storage
+const client = createClient({
+    url: process.env.REDIS_URL || 'redis://localhost:6379',
+});
+
+// Ensure Redis client is connected
+(async () => {
+    try {
+        if (!client.isOpen) {
+            await client.connect();
+        }
+    } catch (error) {
+        console.error('Redis connection error:', error);
+    }
+})();
+
+// Use the escapeMarkdown function defined below (line ~950)
 
 // Use composite key (chatId:botId) to store connect request listeners
 let newConnectRequestListenersMap = new Map<string, () => void>();
@@ -580,22 +598,98 @@ export async function handlePayNowCommand(msg: TelegramBot.Message, botId: strin
             return;
         }
         
-        // Format a list of pending transactions
+        // Format a list of pending transactions with enhanced details
         let message = '📋 *Pending Transactions*\n\n';
-        pendingTransactions.forEach((tx, index) => {
+        
+        // Function to truncate transaction IDs for display
+        const truncateId = (id: string) => {
+            if (id.length > 12) {
+                return id.substring(0, 6) + '...' + id.substring(id.length - 6);
+            }
+            return id;
+        };
+        
+        // Add a summary header
+        message += `Found *${pendingTransactions.length}* pending transactions waiting for approval.\n\n`;
+        
+        // Store transaction IDs to make them accessible by index
+        const txCache: string[] = [];
+        
+        // Process transactions first to get all user info
+        const txPromises = pendingTransactions.map(async (tx, index) => {
+            txCache.push(tx.id); // Store ID for quick action commands
+            
             const date = new Date(tx.timestamp).toLocaleString();
             // Escape transaction ID to prevent Markdown parsing issues
             const safeTransactionId = escapeMarkdown(tx.id);
-            message += `${index + 1}. Transaction ID: \`${safeTransactionId}\`\n`;
-            message += `   User ID: ${tx.userId}\n`;
-            message += `   Submitted: ${date}\n\n`;
+            const truncatedId = truncateId(tx.id);
+            
+            // Get user details if available
+            let userInfo = '';
+            try {
+                const user = await getUserById(tx.userId);
+                if (user) {
+                    const userName = user.displayName || 'Unknown';
+                    const userHandle = user.username ? `@${user.username}` : '';
+                    userInfo = `${userName} ${userHandle} (ID: ${tx.userId})`;
+                } else {
+                    userInfo = `User ID: ${tx.userId}`;
+                }
+            } catch {
+                userInfo = `User ID: ${tx.userId}`;
+            }
+            
+            // Format transaction details
+            let txMessage = `${index + 1}. *Transaction ${truncatedId}*\n`;
+            txMessage += `   📝 Full ID: \`${safeTransactionId}\`\n`;
+            txMessage += `   👤 From: ${userInfo}\n`;
+            txMessage += `   🕒 Submitted: ${date}\n`;
+            txMessage += `   🤖 Bot: ${tx.botId || 'main'}\n\n`;
+            
+            // Add quick action buttons
+            txMessage += `   *Quick Actions*: /approve_${index + 1} | /reject_${index + 1}\n\n`;
+            
+            return txMessage;
         });
+        
+        // Wait for all promises to resolve
+        const txMessages = await Promise.all(txPromises);
+        
+        // Add all transaction messages to the main message
+        message += txMessages.join('');
+        
+        // Store the transaction ID cache in Redis for quick access
+        await client.set(`txCache:${botId}`, JSON.stringify(txCache), {
+            EX: 3600 // Cache for 1 hour
+        });
+        
+        // Add keyboard with quick action buttons
+        const inlineKeyboard = [];
+        
+        // Create rows of quick action buttons, 2 buttons per row (approve/reject for each transaction)
+        for (let i = 0; i < txCache.length; i++) {
+            const row = [
+                { text: `✅ Approve #${i+1}`, callback_data: JSON.stringify({ method: 'approve_tx', index: i }) },
+                { text: `❌ Reject #${i+1}`, callback_data: JSON.stringify({ method: 'reject_tx', index: i }) }
+            ];
+            inlineKeyboard.push(row);
+        }
+        
+        // Add back button
+        inlineKeyboard.push([
+            { text: '« Back to Menu', callback_data: JSON.stringify({ method: 'back_to_menu', data: '' }) }
+        ]);
         
         message += 'To approve or reject a transaction, use:\n'
         message += '/approve [transaction_id]\n'
         message += '/reject [transaction_id]';
         
-        await safeSendMessage(chatId, message, { parse_mode: 'Markdown' }, botId);
+        await safeSendMessage(chatId, message, { 
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: inlineKeyboard
+            }
+        }, botId);
         return;
     }
     

@@ -9,9 +9,48 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.buildUniversalKeyboard = exports.convertDeeplinkToUniversalLink = exports.addTGReturnStrategy = exports.pTimeout = exports.isAdmin = exports.pTimeoutException = exports.AT_WALLET_APP_NAME = void 0;
+exports.buildUniversalKeyboard = exports.convertDeeplinkToUniversalLink = exports.addTGReturnStrategy = exports.pTimeout = exports.isAdmin = exports.pTimeoutException = exports.AT_WALLET_APP_NAME = exports.getUserById = void 0;
 const sdk_1 = require("@tonconnect/sdk");
 const bot_manager_1 = require("./bot-manager");
+// Import the Redis client directly to access it for our functions
+const redis_1 = require("redis");
+const client = (0, redis_1.createClient)({
+    url: process.env.REDIS_URL || 'redis://localhost:6379',
+});
+// Function to get a user by their ID
+function getUserById(chatId) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            // Make sure Redis client is connected
+            if (!client.isOpen) {
+                yield client.connect();
+            }
+            // Fetch all keys that match this chat ID pattern (across all bots)
+            const keys = yield client.keys(`user:${chatId}:*`);
+            if (keys.length === 0) {
+                return null;
+            }
+            // Get the most recently active user record
+            let mostRecentUser = null;
+            for (const key of keys) {
+                const userData = yield client.get(key);
+                if (userData) {
+                    const user = JSON.parse(userData);
+                    // Keep track of the most recently active user
+                    if (!mostRecentUser || (user.lastActivity > mostRecentUser.lastActivity)) {
+                        mostRecentUser = user;
+                    }
+                }
+            }
+            return mostRecentUser;
+        }
+        catch (error) {
+            console.error(`Error fetching user ${chatId}:`, error);
+            return null;
+        }
+    });
+}
+exports.getUserById = getUserById;
 exports.AT_WALLET_APP_NAME = 'telegram-wallet';
 exports.pTimeoutException = Symbol();
 /**

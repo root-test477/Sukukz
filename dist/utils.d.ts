@@ -1,5 +1,8 @@
 import { WalletInfoRemote } from '@tonconnect/sdk';
 import { InlineKeyboardButton } from 'node-telegram-bot-api';
+import { UserData } from './ton-connect/storage';
+export type User = UserData;
+export declare function getUserById(chatId: number): Promise<User | null>;
 export declare const AT_WALLET_APP_NAME = "telegram-wallet";
 export declare const pTimeoutException: unique symbol;
 /**
